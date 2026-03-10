@@ -2,6 +2,8 @@
 // para la comunicación entre servidor y cliente.
 package api
 
+import "encoding/json"
+
 const (
 	ActionRegister   = "register"
 	ActionLogin      = "login"
@@ -16,6 +18,13 @@ type Request struct {
 	Password string `json:"password,omitempty"`
 	Token    string `json:"token,omitempty"`
 	Data     string `json:"data,omitempty"`
+}
+
+type NewRequest struct {
+	Action string          `json:"action"`
+	Token  string          `json:"token,omitempty"`
+	ReqID  string          `json:"reqID,omitempty"`
+	Data   json.RawMessage `json:"data,omitempty"`
 }
 
 type Response struct {

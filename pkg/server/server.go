@@ -24,6 +24,17 @@ type server struct {
 	tokenCounter int64       // contador para generar tokens
 }
 
+type file struct {
+	Name        string    `json:"name"`
+	Content     string    `json:"content"`
+	Modified    time.Time `json:"modified"`
+	Created     time.Time `json:"created"`
+	Permissions string    `json:"permissions"` //Estilo linux
+	Size        int64     `json:"size"`        //En bytes
+	Path        string    `json:"path"`        // /home/user/docs no  \
+	IsDirectory bool      `json:"isDirectory"` //Separa los ficheros como csv
+}
+
 // Run inicia la base de datos y arranca el servidor HTTP.
 func Run() error {
 
