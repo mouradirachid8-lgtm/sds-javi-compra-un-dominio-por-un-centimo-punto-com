@@ -3,18 +3,18 @@
 package server
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
-	"sync/atomic"
-	"time"
-
 	"sprout/pkg/api"
 	"sprout/pkg/store"
+	"time"
 )
 
 // server encapsula el estado de nuestro servidor
@@ -34,6 +34,8 @@ type file struct {
 	Path        string    `json:"path"`        // /home/user/docs no  \
 	IsDirectory bool      `json:"isDirectory"` //Separa los ficheros como csv
 }
+
+var INT64_MAX = big.NewInt(0).SetInt64(1<<63 - 1)
 
 // Run inicia la base de datos y arranca el servidor HTTP.
 func Run() error {
@@ -122,7 +124,12 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 // generateToken crea un token único incrementando un contador interno (inseguro)
 func (s *server) generateToken() string {
 	// atomic es necesario al haber paralelismo en las peticiones HTTP.
-	id := atomic.AddInt64(&s.tokenCounter, 1)
+	n, err := rand.Int(rand.Reader, INT64_MAX)
+	if err != nil {
+		panic(err)
+	}
+	id := n.Int64()
+	//id := atomic.AddInt64(&s.tokenCounter, 1)
 	return fmt.Sprintf("token_%d", id)
 }
 
