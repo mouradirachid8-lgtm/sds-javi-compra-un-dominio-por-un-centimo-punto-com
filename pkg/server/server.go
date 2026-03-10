@@ -14,6 +14,8 @@ import (
 	"os"
 	"sprout/pkg/api"
 	"sprout/pkg/store"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -22,17 +24,6 @@ type server struct {
 	db           store.Store // base de datos
 	log          *log.Logger // logger para mensajes de error e información
 	tokenCounter int64       // contador para generar tokens
-}
-
-type file struct {
-	Name        string    `json:"name"`
-	Content     string    `json:"content"`
-	Modified    time.Time `json:"modified"`
-	Created     time.Time `json:"created"`
-	Permissions string    `json:"permissions"` //Estilo linux
-	Size        int64     `json:"size"`        //En bytes
-	Path        string    `json:"path"`        // /home/user/docs no  \
-	IsDirectory bool      `json:"isDirectory"` //Separa los ficheros como csv
 }
 
 var INT64_MAX = big.NewInt(0).SetInt64(1<<63 - 1)
@@ -122,7 +113,7 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // generateToken crea un token único incrementando un contador interno (inseguro)
-func (s *server) generateToken() string {
+func (s *server) generateToken(username string) string {
 	// atomic es necesario al haber paralelismo en las peticiones HTTP.
 	n, err := rand.Int(rand.Reader, INT64_MAX)
 	if err != nil {
@@ -130,20 +121,25 @@ func (s *server) generateToken() string {
 	}
 	id := n.Int64()
 	//id := atomic.AddInt64(&s.tokenCounter, 1)
-	return fmt.Sprintf("token_%d", id)
+	return fmt.Sprintf("token_%d+%s", id, username)
 }
 
 // registerUser registra un nuevo usuario, si no existe.
 // - Guardamos la contraseña en el namespace 'auth'
 // - Creamos entrada vacía en 'userdata' para el usuario
 func (s *server) registerUser(req api.Request) api.Response {
+	var regReq api.RegisterRequest
+	if err := json.Unmarshal(req.Body, &regReq); err != nil {
+		return api.Response{Success: false, Message: "Error al procesar la solicitud"}
+	}
+
 	// Validación básica
-	if req.Username == "" || req.Password == "" {
+	if regReq.Username == "" || regReq.Password == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
 
 	// Verificamos si ya existe el usuario en 'auth'
-	exists, err := s.userExists(req.Username)
+	exists, err := s.userExists(regReq.Username)
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al verificar usuario"}
 	}
@@ -152,12 +148,12 @@ func (s *server) registerUser(req api.Request) api.Response {
 	}
 
 	// Almacenamos la contraseña en el namespace 'auth' (clave=nombre, valor=contraseña)
-	if err := s.db.Put("auth", []byte(req.Username), []byte(req.Password)); err != nil {
+	if err := s.db.Put("auth", []byte(regReq.Username), []byte(regReq.Password)); err != nil {
 		return api.Response{Success: false, Message: "Error al guardar credenciales"}
 	}
 
 	// Creamos una entrada vacía para los datos en 'userdata'
-	if err := s.db.Put("userdata", []byte(req.Username), []byte("")); err != nil {
+	if err := s.db.Put("userdata", []byte(regReq.Username), []byte("")); err != nil {
 		return api.Response{Success: false, Message: "Error al inicializar datos de usuario"}
 	}
 
@@ -166,24 +162,29 @@ func (s *server) registerUser(req api.Request) api.Response {
 
 // loginUser valida credenciales en el namespace 'auth' y genera un token en 'sessions'.
 func (s *server) loginUser(req api.Request) api.Response {
-	if req.Username == "" || req.Password == "" {
+	var loginReq api.LoginRequest
+	if err := json.Unmarshal(req.Body, &loginReq); err != nil {
+		return api.Response{Success: false, Message: "Error al procesar la solicitud"}
+	}
+
+	if loginReq.Username == "" || loginReq.Password == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
 
 	// Recogemos la contraseña guardada en 'auth'
-	storedPass, err := s.db.Get("auth", []byte(req.Username))
+	storedPass, err := s.db.Get("auth", []byte(loginReq.Username))
 	if err != nil {
 		return api.Response{Success: false, Message: "Usuario no encontrado"}
 	}
 
 	// Comparamos
-	if string(storedPass) != req.Password {
+	if string(storedPass) != loginReq.Password {
 		return api.Response{Success: false, Message: "Credenciales inválidas"}
 	}
 
 	// Generamos un nuevo token, lo guardamos en 'sessions'
-	token := s.generateToken()
-	if err := s.db.Put("sessions", []byte(req.Username), []byte(token)); err != nil {
+	token := s.generateToken(loginReq.Username)
+	if err := s.db.Put("sessions", []byte(token), []byte(loginReq.Username)); err != nil {
 		return api.Response{Success: false, Message: "Error al crear sesión"}
 	}
 
@@ -193,22 +194,23 @@ func (s *server) loginUser(req api.Request) api.Response {
 // fetchData verifica el token y retorna el contenido del namespace 'userdata'.
 func (s *server) fetchData(req api.Request) api.Response {
 	// Chequeo de credenciales
-	if req.Username == "" || req.Token == "" {
+	if req.Token == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
-	if !s.isTokenValid(req.Username, req.Token) {
+	valid, username := s.isTokenValid(req.Token)
+	if !valid {
 		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
 	}
 
 	// Obtenemos los datos asociados al usuario desde 'userdata'
-	rawData, err := s.db.Get("userdata", []byte(req.Username))
+	rawData, err := s.db.Get("userdata", []byte(username))
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al obtener datos del usuario"}
 	}
 
 	return api.Response{
 		Success: true,
-		Message: "Datos privados de " + req.Username,
+		Message: "Datos privados de " + username,
 		Data:    string(rawData),
 	}
 }
@@ -217,15 +219,16 @@ func (s *server) fetchData(req api.Request) api.Response {
 // después de validar el token.
 func (s *server) updateData(req api.Request) api.Response {
 	// Chequeo de credenciales
-	if req.Username == "" || req.Token == "" {
+	if req.Token == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
-	if !s.isTokenValid(req.Username, req.Token) {
+	valid, username := s.isTokenValid(req.Token)
+	if !valid {
 		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
 	}
 
 	// Escribimos el nuevo dato en 'userdata'
-	if err := s.db.Put("userdata", []byte(req.Username), []byte(req.Data)); err != nil {
+	if err := s.db.Put("userdata", []byte(username), []byte(req.Data)); err != nil {
 		return api.Response{Success: false, Message: "Error al actualizar datos del usuario"}
 	}
 
@@ -235,15 +238,16 @@ func (s *server) updateData(req api.Request) api.Response {
 // logoutUser borra la sesión en 'sessions', invalidando el token.
 func (s *server) logoutUser(req api.Request) api.Response {
 	// Chequeo de credenciales
-	if req.Username == "" || req.Token == "" {
+	if req.Token == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
-	if !s.isTokenValid(req.Username, req.Token) {
+	valid, _ := s.isTokenValid(req.Token)
+	if !valid {
 		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
 	}
 
 	// Borramos la entrada en 'sessions'
-	if err := s.db.Delete("sessions", []byte(req.Username)); err != nil {
+	if err := s.db.Delete("sessions", []byte(req.Token)); err != nil {
 		return api.Response{Success: false, Message: "Error al cerrar sesión"}
 	}
 
@@ -266,10 +270,24 @@ func (s *server) userExists(username string) (bool, error) {
 
 // isTokenValid comprueba que el token almacenado en 'sessions'
 // coincida con el token proporcionado.
-func (s *server) isTokenValid(username, token string) bool {
-	storedToken, err := s.db.Get("sessions", []byte(username))
-	if err != nil {
-		return false
+func (s *server) isTokenValid(token string) (bool, string) {
+	codePart, extractedUsername, ok := strings.Cut(token, "+")
+	if !ok {
+		return false, ""
 	}
-	return string(storedToken) == token
+
+	idStr := strings.TrimPrefix(codePart, "token_")
+	_, errParse := strconv.ParseInt(idStr, 10, 64)
+	if errParse != nil {
+		return false, ""
+	}
+	username, err := s.db.Get("sessions", []byte(token))
+	if err != nil {
+		return false, ""
+	}
+	if string(username) == extractedUsername {
+		return true, extractedUsername
+	} else {
+		return false, ""
+	}
 }

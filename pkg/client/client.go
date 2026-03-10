@@ -122,12 +122,14 @@ func (c *client) registerUser() {
 		c.log.Println("No se ha podido obtener la contraseña, registro cancelado: ", err)
 		return
 	}
-
-	// Enviamos la acción al servidor
-	res := c.sendRequest(api.Request{
-		Action:   api.ActionRegister,
+	body, _ := json.Marshal(api.RegisterRequest{
 		Username: username,
 		Password: password,
+	})
+	// Enviamos la acción al servidor
+	res := c.sendRequest(api.Request{
+		Action: api.ActionRegister,
+		Body:   body,
 	})
 
 	// Mostramos resultado
@@ -138,10 +140,14 @@ func (c *client) registerUser() {
 	if res.Success {
 		c.log.Println("Registro exitoso; intentando login automático...")
 
-		loginRes := c.sendRequest(api.Request{
-			Action:   api.ActionLogin,
+		body, _ := json.Marshal(api.LoginRequest{
 			Username: username,
 			Password: password,
+		})
+
+		loginRes := c.sendRequest(api.Request{
+			Action: api.ActionLogin,
+			Body:   body,
 		})
 		if loginRes.Success {
 			c.currentUser = username
@@ -165,11 +171,14 @@ func (c *client) loginUser() {
 		c.log.Println("No se ha podido obtener la contraseña, registro cancelado: ", err)
 		return
 	}
-
-	res := c.sendRequest(api.Request{
-		Action:   api.ActionLogin,
+	body, _ := json.Marshal(api.LoginRequest{
 		Username: username,
 		Password: password,
+	})
+
+	res := c.sendRequest(api.Request{
+		Action: api.ActionLogin,
+		Body:   body,
 	})
 
 	fmt.Println("Éxito:", res.Success)
@@ -197,9 +206,8 @@ func (c *client) fetchData() {
 
 	// Hacemos la request con ActionFetchData
 	res := c.sendRequest(api.Request{
-		Action:   api.ActionFetchData,
-		Username: c.currentUser,
-		Token:    c.authToken,
+		Action: api.ActionFetchData,
+		Token:  c.authToken,
 	})
 
 	fmt.Println("Éxito:", res.Success)
@@ -226,10 +234,9 @@ func (c *client) updateData() {
 
 	// Enviamos la solicitud de actualización
 	res := c.sendRequest(api.Request{
-		Action:   api.ActionUpdateData,
-		Username: c.currentUser,
-		Token:    c.authToken,
-		Data:     newData,
+		Action: api.ActionUpdateData,
+		Token:  c.authToken,
+		Data:   newData,
 	})
 
 	fmt.Println("Éxito:", res.Success)
@@ -249,9 +256,8 @@ func (c *client) logoutUser() {
 
 	// Llamamos al servidor con la acción ActionLogout
 	res := c.sendRequest(api.Request{
-		Action:   api.ActionLogout,
-		Username: c.currentUser,
-		Token:    c.authToken,
+		Action: api.ActionLogout,
+		Token:  c.authToken,
 	})
 
 	fmt.Println("Éxito:", res.Success)
