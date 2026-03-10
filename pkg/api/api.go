@@ -60,3 +60,33 @@ type file struct {
 	Path        string    `json:"path"`        // /home/user/docs no  \
 	IsDirectory bool      `json:"isDirectory"` //Separa los ficheros como csv
 }
+
+type UpdateDataRequest struct {
+	File  file `json:"file"`
+	Force bool `json:"force"` // Si true, sobreescribe sin preguntar. Si false, devuelve error si el fichero ya existe.
+}
+
+type UpdateDataResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+type LookupRequest struct {
+	Path string `json:"path"` // Path es la ruta del directorio a listar, por ejemplo "/home/user/docs"
+}
+
+type LookupResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+	Files   []file `json:"files,omitempty"` // Si Success es true, Files contiene la lista de ficheros en el directorio, pero sin su contenido.
+}
+
+type FetchDataRequest struct {
+	Path string `json:"path"` // Path es la ruta del fichero a leer, por ejemplo "/home/user/docs/file.txt"
+}
+
+type FetchDataResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+	File    file   `json:"file,omitempty"` // Si Success es true, File contiene el fichero solicitado, incluyendo su contenido.
+}
