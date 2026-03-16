@@ -23,6 +23,7 @@ type client struct {
 	currentUser string
 	authToken   string
 	httpClient  *http.Client
+	server      string
 }
 
 // Run es la única función exportada de este paquete.
@@ -35,6 +36,7 @@ func Run() {
 		httpClient: &http.Client{
 			Timeout: 5 * time.Second,
 		},
+		server: "http://localhost:8080/api",
 	}
 	c.runLoop()
 }
@@ -128,9 +130,8 @@ func (c *client) registerUser() {
 	})
 	// Enviamos la acción al servidor
 	res := c.sendRequest(api.Request{
-		Action: api.ActionRegister,
-		Body:   body,
-	})
+		Body: body,
+	}, nil, api.ActionRegister)
 
 	// Mostramos resultado
 	fmt.Println("Éxito:", res.Success)
@@ -140,15 +141,9 @@ func (c *client) registerUser() {
 	if res.Success {
 		c.log.Println("Registro exitoso; intentando login automático...")
 
-		body, _ := json.Marshal(api.LoginRequest{
-			Username: username,
-			Password: password,
-		})
-
 		loginRes := c.sendRequest(api.Request{
-			Action: api.ActionLogin,
-			Body:   body,
-		})
+			Body: body,
+		}, nil, api.ActionLogin)
 		if loginRes.Success {
 			c.currentUser = username
 			c.authToken = loginRes.Token
@@ -171,15 +166,15 @@ func (c *client) loginUser() {
 		c.log.Println("No se ha podido obtener la contraseña, registro cancelado: ", err)
 		return
 	}
+
 	body, _ := json.Marshal(api.LoginRequest{
 		Username: username,
 		Password: password,
 	})
 
 	res := c.sendRequest(api.Request{
-		Action: api.ActionLogin,
-		Body:   body,
-	})
+		Body: body,
+	}, nil, api.ActionLogin)
 
 	fmt.Println("Éxito:", res.Success)
 	fmt.Println("Mensaje:", res.Message)
@@ -205,10 +200,7 @@ func (c *client) fetchData() {
 	}
 
 	// Hacemos la request con ActionFetchData
-	res := c.sendRequest(api.Request{
-		Action: api.ActionFetchData,
-		Token:  c.authToken,
-	})
+	res := c.sendRequest(api.Request{}, nil, api.ActionFetchData)
 
 	fmt.Println("Éxito:", res.Success)
 	fmt.Println("Mensaje:", res.Message)
@@ -230,14 +222,27 @@ func (c *client) updateData() {
 	}
 
 	// Leemos la nueva Data
-	newData := ui.ReadInput("Introduce el contenido que desees almacenar")
+	filePath := ui.ReadInput("Introduce el fichero que desees almacenar")
+	fileStat, err := os.Stat(filePath)
+	if err != nil {
+		c.log.Println("No se ha podido acceder al fichero:", err)
+		return
+	}
+	path := ui.ReadInput("Introduce la ruta donde quieres almacenar el fichero en el servidor (ej: /docs/miarchivo.txt)")
+
+	if fileStat.IsDir() { // De momento solo se permiten ficheros
+		c.log.Println("La ruta introducida es un directorio, se esperaba un fichero.")
+		return
+	}
+	file, err := os.Open(filePath)
+	if err != nil {
+		c.log.Println("No se ha podido abrir el fichero:", err)
+		return
+	}
+	defer file.Close()
 
 	// Enviamos la solicitud de actualización
-	res := c.sendRequest(api.Request{
-		Action: api.ActionUpdateData,
-		Token:  c.authToken,
-		Data:   newData,
-	})
+	res := c.sendStreamingRequest(file, []http.Header{}, api.ActionUpdateData, path)
 
 	fmt.Println("Éxito:", res.Success)
 	fmt.Println("Mensaje:", res.Message)
@@ -255,10 +260,7 @@ func (c *client) logoutUser() {
 	}
 
 	// Llamamos al servidor con la acción ActionLogout
-	res := c.sendRequest(api.Request{
-		Action: api.ActionLogout,
-		Token:  c.authToken,
-	})
+	res := c.sendRequest(api.Request{}, nil, api.ActionLogout)
 
 	fmt.Println("Éxito:", res.Success)
 	fmt.Println("Mensaje:", res.Message)
@@ -270,21 +272,90 @@ func (c *client) logoutUser() {
 	}
 }
 
+// sendStreamingRequest es una función especializada para enviar datos binarios (ficheros) al servidor.
+func (c *client) sendStreamingRequest(file io.Reader, headers []http.Header, action string, path string) api.Response {
+	valid := api.IsValidAction(action)
+	if !valid {
+		c.log.Println("Acción no válida:", action)
+		return api.Response{Success: false, Message: "Acción no válida"}
+	}
+	httpReq, err := http.NewRequest(http.MethodPost, c.server, file)
+	if err != nil {
+		c.log.Println("No se ha podido construir la petición HTTP:", err)
+		return api.Response{Success: false, Message: "Error interno del cliente"}
+	}
+	httpReq.Header.Set("Content-Type", "application/octet-stream")
+	httpReq.Header.Set("X-Action", action)
+	if c.authToken != "" {
+		httpReq.Header.Set("X-Token", c.authToken)
+	}
+	httpReq.Header.Set("X-Path", path)
+
+	for _, h := range headers {
+		for k, v := range h {
+			for _, vv := range v {
+				httpReq.Header.Set(k, vv)
+			}
+		}
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		fmt.Println("Error al contactar con el servidor:", err)
+		return api.Response{Success: false, Message: "Error de conexión"}
+	}
+	defer resp.Body.Close()
+
+	// Leemos el body de respuesta y lo desempaquetamos en un api.Response.
+	// Si el servidor ha respondido con un error HTTP, intentamos igualmente
+	// descodificar un api.Response para mostrar el mensaje.
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		c.log.Println("No se ha podido leer la respuesta:", err)
+		return api.Response{Success: false, Message: "Respuesta inválida del servidor"}
+	}
+	var res api.Response
+	if err := json.Unmarshal(body, &res); err != nil {
+		c.log.Println("No se ha podido descodificar la respuesta JSON:", err)
+		return api.Response{Success: false, Message: "Respuesta inválida del servidor"}
+	}
+	return res
+
+}
+
 // sendRequest envía un POST JSON a la URL del servidor y
 // devuelve la respuesta decodificada. Se usa para todas las acciones.
-func (c *client) sendRequest(req api.Request) api.Response {
+func (c *client) sendRequest(req api.Request, headers []http.Header, action string) api.Response {
+	valid := api.IsValidAction(action)
+	if !valid {
+		c.log.Println("Acción no válida:", action)
+		return api.Response{Success: false, Message: "Acción no válida"}
+	}
+
 	jsonData, err := json.Marshal(req)
 	if err != nil {
 		c.log.Println("No se ha podido serializar la petición JSON:", err)
 		return api.Response{Success: false, Message: "Error interno del cliente"}
 	}
 
-	httpReq, err := http.NewRequest(http.MethodPost, "http://localhost:8080/api", bytes.NewBuffer(jsonData))
+	httpReq, err := http.NewRequest(http.MethodPost, c.server, bytes.NewBuffer(jsonData))
 	if err != nil {
 		c.log.Println("No se ha podido construir la petición HTTP:", err)
 		return api.Response{Success: false, Message: "Error interno del cliente"}
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Action", action)
+	if c.authToken != "" {
+		httpReq.Header.Set("X-Token", c.authToken)
+	}
+
+	for _, h := range headers {
+		for k, v := range h {
+			for _, vv := range v {
+				httpReq.Header.Set(k, vv)
+			}
+		}
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {

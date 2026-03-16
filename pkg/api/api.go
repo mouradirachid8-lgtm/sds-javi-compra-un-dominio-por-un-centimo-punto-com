@@ -16,21 +16,23 @@ const (
 	ActionLookup     = "lookup"
 )
 
-/*
-	type Request struct {
-		Action   string `json:"action"`
-		Username string `json:"username"`
-		Password string `json:"password,omitempty"`
-		Token    string `json:"token,omitempty"`
-		Data     string `json:"data,omitempty"`
-	}
-*/
+var allowedActions = map[string]struct{}{
+	ActionRegister:   {},
+	ActionLogin:      {},
+	ActionFetchData:  {},
+	ActionUpdateData: {},
+	ActionLogout:     {},
+	ActionLookup:     {},
+}
+
+func IsValidAction(action string) bool {
+	_, ok := allowedActions[action]
+	return ok
+}
+
 type Request struct {
-	Action string          `json:"action"`
-	Token  string          `json:"token,omitempty"`
-	ReqID  string          `json:"reqID,omitempty"`
-	Body   json.RawMessage `json:"body,omitempty"`
-	Data   string          `json:"data,omitempty"`
+	ReqID string          `json:"reqID,omitempty"`
+	Body  json.RawMessage `json:"body,omitempty"`
 }
 
 type RegisterRequest struct {
@@ -50,7 +52,7 @@ type Response struct {
 	Data    string `json:"data,omitempty"`
 }
 
-type file struct {
+type File struct {
 	Name        string    `json:"name"`
 	Content     string    `json:"content"`
 	Modified    time.Time `json:"modified"`
@@ -62,7 +64,7 @@ type file struct {
 }
 
 type UpdateDataRequest struct {
-	File  file `json:"file"`
+	File  File `json:"file"`
 	Force bool `json:"force"` // Si true, sobreescribe sin preguntar. Si false, devuelve error si el fichero ya existe.
 }
 
@@ -78,7 +80,7 @@ type LookupRequest struct {
 type LookupResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
-	Files   []file `json:"files,omitempty"` // Si Success es true, Files contiene la lista de ficheros en el directorio, pero sin su contenido.
+	Files   []File `json:"files,omitempty"` // Si Success es true, Files contiene la lista de ficheros en el directorio, pero sin su contenido.
 }
 
 type FetchDataRequest struct {
@@ -88,5 +90,5 @@ type FetchDataRequest struct {
 type FetchDataResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
-	File    file   `json:"file,omitempty"` // Si Success es true, File contiene el fichero solicitado, incluyendo su contenido.
+	File    File   `json:"file,omitempty"` // Si Success es true, File contiene el fichero solicitado, incluyendo su contenido.
 }

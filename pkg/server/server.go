@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sprout/pkg/api"
 	"sprout/pkg/store"
 	"strconv"
@@ -21,9 +22,9 @@ import (
 
 // server encapsula el estado de nuestro servidor
 type server struct {
-	db           store.Store // base de datos
-	log          *log.Logger // logger para mensajes de error e información
-	tokenCounter int64       // contador para generar tokens
+	db       store.Store // base de datos
+	log      *log.Logger // logger para mensajes de error e información
+	basePath string      // ruta base para almacenar archivos (opcional)
 }
 
 var INT64_MAX = big.NewInt(0).SetInt64(1<<63 - 1)
@@ -44,8 +45,9 @@ func Run() error {
 
 	// Creamos nuestro servidor con su logger con prefijo 'srv'
 	srv := &server{
-		db:  db,
-		log: log.New(os.Stdout, "[srv] ", log.LstdFlags),
+		db:       db,
+		log:      log.New(os.Stdout, "[srv] ", log.LstdFlags),
+		basePath: "data/files", // carpeta para almacenar archivos (opcional)
 	}
 
 	// Al terminar, cerramos la base de datos
@@ -71,7 +73,33 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
 		return
 	}
+	actionHeader := r.Header.Get("X-Action")
+	if actionHeader == "" {
+		http.Error(w, "Falta la cabecera X-Action", http.StatusBadRequest)
+		return
+	}
+	if !api.IsValidAction(actionHeader) {
+		http.Error(w, "Acción no válida", http.StatusBadRequest)
+		return
+	}
+	ContentType := r.Header.Get("Content-Type")
+	if ContentType == "" {
+		http.Error(w, "Falta la cabecera Content-Type", http.StatusBadRequest)
+		return
+	}
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		s.jsonHandler(w, r)
+		return
+	} else if strings.HasPrefix(r.Header.Get("Content-Type"), "application/octet-stream") {
+		s.fileHandler(w, r)
+		return
+	} else {
+		http.Error(w, "Content-Type no soportado", http.StatusUnsupportedMediaType)
+		return
+	}
+}
 
+func (s *server) jsonHandler(w http.ResponseWriter, r *http.Request) {
 	// Limitamos el tamaño del body para evitar sorpresas.
 	// (No es una medida de seguridad "de verdad"; sólo robustez.)
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MiB
@@ -89,25 +117,39 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error en el formato JSON", http.StatusBadRequest)
 		return
 	}
-
+	action := r.Header.Get("X-Action")
+	token := r.Header.Get("X-Token")
 	// Despacho según la acción solicitada
 	var res api.Response
-	switch req.Action {
+	switch action {
 	case api.ActionRegister:
 		res = s.registerUser(req)
 	case api.ActionLogin:
 		res = s.loginUser(req)
 	case api.ActionFetchData:
-		res = s.fetchData(req)
-	case api.ActionUpdateData:
-		res = s.updateData(req)
+		res = s.fetchData(req, token)
 	case api.ActionLogout:
-		res = s.logoutUser(req)
+		res = s.logoutUser(req, token)
 	default:
 		res = api.Response{Success: false, Message: "Acción desconocida"}
 	}
 
 	// Enviamos la respuesta en formato JSON
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(res)
+}
+
+func (s *server) fileHandler(w http.ResponseWriter, r *http.Request) {
+	action := r.Header.Get("X-Action")
+	token := r.Header.Get("X-Token")
+	var res api.Response
+	switch action {
+	case api.ActionUpdateData:
+		res = s.updateData(r.Body, token, r.Header.Get("X-Path"), r.Header.Get("X-Force") == "true")
+	default:
+		res = api.Response{Success: false, Message: "Acción desconocida"}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(res)
 }
@@ -192,12 +234,12 @@ func (s *server) loginUser(req api.Request) api.Response {
 }
 
 // fetchData verifica el token y retorna el contenido del namespace 'userdata'.
-func (s *server) fetchData(req api.Request) api.Response {
+func (s *server) fetchData(req api.Request, token string) api.Response {
 	// Chequeo de credenciales
-	if req.Token == "" {
+	if token == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
-	valid, username := s.isTokenValid(req.Token)
+	valid, username := s.isTokenValid(token)
 	if !valid {
 		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
 	}
@@ -217,37 +259,36 @@ func (s *server) fetchData(req api.Request) api.Response {
 
 // updateData cambia el contenido de 'userdata' (los "datos" del usuario)
 // después de validar el token.
-func (s *server) updateData(req api.Request) api.Response {
+func (s *server) updateData(body io.ReadCloser, token string, path string, force bool) api.Response {
 	// Chequeo de credenciales
-	if req.Token == "" {
+	if token == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
-	valid, username := s.isTokenValid(req.Token)
+	valid, username := s.isTokenValid(token)
 	if !valid {
 		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
 	}
 
-	// Escribimos el nuevo dato en 'userdata'
-	if err := s.db.Put("userdata", []byte(username), []byte(req.Data)); err != nil {
-		return api.Response{Success: false, Message: "Error al actualizar datos del usuario"}
+	if err := s.saveFile(body, username, force, path); err != nil {
+		return api.Response{Success: false, Message: "Error al guardar datos: " + err.Error()}
 	}
 
 	return api.Response{Success: true, Message: "Datos de usuario actualizados"}
 }
 
 // logoutUser borra la sesión en 'sessions', invalidando el token.
-func (s *server) logoutUser(req api.Request) api.Response {
+func (s *server) logoutUser(req api.Request, token string) api.Response {
 	// Chequeo de credenciales
-	if req.Token == "" {
+	if token == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
-	valid, _ := s.isTokenValid(req.Token)
+	valid, _ := s.isTokenValid(token)
 	if !valid {
 		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
 	}
 
 	// Borramos la entrada en 'sessions'
-	if err := s.db.Delete("sessions", []byte(req.Token)); err != nil {
+	if err := s.db.Delete("sessions", []byte(token)); err != nil {
 		return api.Response{Success: false, Message: "Error al cerrar sesión"}
 	}
 
@@ -290,4 +331,50 @@ func (s *server) isTokenValid(token string) (bool, string) {
 	} else {
 		return false, ""
 	}
+}
+
+func (s *server) saveFile(body io.ReadCloser, username string, force bool, path string) error {
+	path = strings.ReplaceAll(path, "\\", "/") // Evitamos barras invertidas
+	path = strings.TrimSpace(path)
+
+	// Si el cliente envía una ruta absoluta (Windows/Linux), nos quedamos con el nombre.
+	if filepath.IsAbs(path) || (len(path) >= 2 && path[1] == ':') {
+		path = filepath.Base(path)
+	}
+
+	path = strings.TrimPrefix(path, "/")
+	path = "/" + username + "/" + path
+	path = strings.ReplaceAll(path, "//", "/") // Evitamos dobles barras
+
+	data, err := s.db.Get("userdata", []byte(path))
+	if err != nil {
+		// Si no existe la clave/namespace, lo tratamos como alta nueva.
+		if !errors.Is(err, store.ErrKeyNotFound) && !errors.Is(err, store.ErrNamespaceNotFound) {
+			return fmt.Errorf("error al leer datos: %w", err)
+		}
+	} else if data != nil && !force {
+		return fmt.Errorf("archivo ya existe")
+	}
+
+	s.log.Printf("Guardando archivo para usuario '%s' en path '%s'", username, path)
+	if err := os.MkdirAll(filepath.Dir(s.basePath+path), 0755); err != nil {
+		return fmt.Errorf("error al crear directorios: %w", err)
+	}
+	file, err := os.Create(s.basePath + path) // Creamos el fichero en el sistema de archivos
+	if err != nil {
+		return fmt.Errorf("error al crear archivo: %w", err)
+	}
+	defer file.Close()
+	_, err = io.Copy(file, body) // Copiamos el contenido del body al fichero
+	if err != nil {
+		return fmt.Errorf("error al copiar datos: %w", err)
+	}
+
+	fileBytes, err := json.Marshal(api.File{})
+
+	if err := s.db.Put("userdata", []byte(path), fileBytes); err != nil {
+		return fmt.Errorf("error al guardar archivo: %w", err)
+	}
+
+	return nil
 }
