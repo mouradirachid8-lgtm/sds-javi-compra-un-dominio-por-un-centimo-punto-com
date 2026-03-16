@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"sprout/pkg/api"
@@ -246,6 +247,26 @@ func (c *client) updateData() {
 
 	fmt.Println("Éxito:", res.Success)
 	fmt.Println("Mensaje:", res.Message)
+	if !res.Success {
+		strings.Contains(res.Message, "archivo ya existe")
+		response := ui.ReadInput("Desea actualizar el archivo (S/n)")
+		response = strings.ToLower(response)
+		if response == "s" {
+
+			file, err := os.Open(filePath) // Reabrimos el fichero de nuevo
+			if err != nil {
+				c.log.Println("No se ha podido abrir el fichero:", err)
+				return
+			}
+			defer file.Close()
+
+			res = c.sendStreamingRequest(file, []http.Header{
+				{"X-Force": {"true"}},
+			}, api.ActionUpdateData, path)
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+		}
+	}
 }
 
 // logoutUser llama a la acción logout en el servidor, y si es exitosa,
