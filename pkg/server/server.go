@@ -29,6 +29,8 @@ type server struct {
 
 var INT64_MAX = big.NewInt(0).SetInt64(1<<63 - 1)
 
+const maxUploadSize = 1000 << 20 // 1000 MiB por defecto
+
 // Run inicia la base de datos y arranca el servidor HTTP.
 func Run() error {
 
@@ -140,6 +142,15 @@ func (s *server) jsonHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) fileHandler(w http.ResponseWriter, r *http.Request) {
+	// Limitar el tamaño del body usando el ResponseWriter para que
+	// http.MaxBytesReader pueda escribir el error en caso de exceder.
+	if r.ContentLength > 0 && r.ContentLength > maxUploadSize {
+		http.Error(w, "Archivo demasiado grande", http.StatusRequestEntityTooLarge)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
+	defer r.Body.Close()
+
 	action := r.Header.Get("X-Action")
 	token := r.Header.Get("X-Token")
 	var res api.Response
@@ -336,6 +347,9 @@ func (s *server) isTokenValid(token string) (bool, string) {
 func (s *server) saveFile(body io.ReadCloser, username string, force bool, path string) error {
 	path = strings.ReplaceAll(path, "\\", "/") // Evitamos barras invertidas
 	path = strings.TrimSpace(path)
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("No se admite '..'")
+	}
 
 	// Si el cliente envía una ruta absoluta (Windows/Linux), nos quedamos con el nombre.
 	if filepath.IsAbs(path) || (len(path) >= 2 && path[1] == ':') {
@@ -345,7 +359,7 @@ func (s *server) saveFile(body io.ReadCloser, username string, force bool, path 
 	path = strings.TrimPrefix(path, "/")
 	path = "/" + username + "/" + path
 	path = strings.ReplaceAll(path, "//", "/") // Evitamos dobles barras
-
+	var creationTime int64
 	data, err := s.db.Get("userdata", []byte(path))
 	if err != nil {
 		// Si no existe la clave/namespace, lo tratamos como alta nueva.
@@ -354,6 +368,14 @@ func (s *server) saveFile(body io.ReadCloser, username string, force bool, path 
 		}
 	} else if data != nil && !force {
 		return fmt.Errorf("archivo ya existe")
+	}
+
+	if data != nil {
+		var existingFile api.File
+		if err := json.Unmarshal(data, &existingFile); err != nil {
+			return fmt.Errorf("error al procesar datos existentes: %w", err)
+		}
+		creationTime = existingFile.Created.Unix()
 	}
 
 	s.log.Printf("Guardando archivo para usuario '%s' en path '%s'", username, path)
@@ -376,7 +398,7 @@ func (s *server) saveFile(body io.ReadCloser, username string, force bool, path 
 	fileBytes, err := json.Marshal(api.File{
 		Name:        filepath.Base(path),
 		Modified:    time.Now(),
-		Created:     time.Now(),
+		Created:     time.Unix(creationTime, 0),
 		Size:        stats.Size(),
 		Path:        path,
 		IsDirectory: false,

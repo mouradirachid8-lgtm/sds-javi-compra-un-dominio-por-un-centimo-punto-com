@@ -10,11 +10,11 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
-	"time"
-
+	"path/filepath"
 	"sprout/pkg/api"
 	"sprout/pkg/ui"
+	"strings"
+	"time"
 )
 
 // client estructura interna no exportada que controla
@@ -223,48 +223,77 @@ func (c *client) updateData() {
 	}
 
 	// Leemos la nueva Data
-	filePath := ui.ReadInput("Introduce el fichero que desees almacenar")
-	fileStat, err := os.Stat(filePath)
+	filePathVar := ui.ReadInput("Introduce el fichero que desees almacenar")
+	fileStat, err := os.Stat(filePathVar)
 	if err != nil {
 		c.log.Println("No se ha podido acceder al fichero:", err)
 		return
 	}
-	path := ui.ReadInput("Introduce la ruta donde quieres almacenar el fichero en el servidor (ej: /docs/miarchivo.txt)")
-
 	if fileStat.IsDir() { // De momento solo se permiten ficheros
-		c.log.Println("La ruta introducida es un directorio, se esperaba un fichero.")
-		return
+		c.log.Println("La ruta introducida es un directorio, todo el contenido se subirá y remplazara al existente, continuar (S/n)?")
+		response := ui.ReadInput("")
+		response = strings.ToLower(response)
+		if response != "s" {
+			return
+		}
 	}
-	file, err := os.Open(filePath)
-	if err != nil {
-		c.log.Println("No se ha podido abrir el fichero:", err)
-		return
-	}
-	defer file.Close()
+
+	destBasePath := ui.ReadInput("Introduce la ruta donde quieres almacenar el fichero en el servidor (ej: /docs/miarchivo.txt)")
 
 	// Enviamos la solicitud de actualización
-	res := c.sendStreamingRequest(file, []http.Header{}, api.ActionUpdateData, path)
+	if fileStat.IsDir() {
+		fmt.Println("Subiendo archivos: ")
+		//Como detecto el SO?
+		if !strings.HasSuffix(filePathVar, "\\") { // Añadimos \ (windows)
+			filePathVar += "\\"
+		}
+		fmt.Println("filePathVar: ", filePathVar)
+		//Imprimimos un mensaje con todo el contenido del directorio
+		filepath.Walk(filePathVar, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			destpath := destBasePath + strings.TrimPrefix(path, filePathVar)
+			fmt.Println(path, " - ", info.Size(), " bytes a ", destpath)
+			if destpath != "" {
+				res, err := c.uploadFile(path, destpath, false)
+				if err != nil {
+					fmt.Println("Error al subir el fichero :", err)
+					fmt.Println("Continua...")
+				}
+				if !res.Success {
+					fmt.Println("Error al subir el fichero :", res.Message)
+					fmt.Println("Continua...")
+				} else {
+					fmt.Println("Subido archivo  con exito", path, " a ", destpath)
+				}
+			}
+			return nil
+		})
+		fmt.Println("Subido directorio completo")
+		return
+	}
+	res, err := c.uploadFile(filePathVar, destBasePath, false)
+	if err != nil {
+		c.log.Println("Error al subir el fichero", filePathVar, " :", err)
+		return
+	}
 
 	fmt.Println("Éxito:", res.Success)
 	fmt.Println("Mensaje:", res.Message)
 	if !res.Success {
-		strings.Contains(res.Message, "archivo ya existe")
-		response := ui.ReadInput("Desea actualizar el archivo (S/n)")
-		response = strings.ToLower(response)
-		if response == "s" {
-
-			file, err := os.Open(filePath) // Reabrimos el fichero de nuevo
-			if err != nil {
-				c.log.Println("No se ha podido abrir el fichero:", err)
-				return
+		if strings.Contains(res.Message, "archivo ya existe") {
+			response := ui.ReadInput("Desea actualizar el archivo (S/n)")
+			response = strings.ToLower(response)
+			if response == "s" {
+				res, err = c.uploadFile(filePathVar, destBasePath, true)
+				if err != nil {
+					c.log.Println("Error al subir el fichero", filePathVar, " :", err)
+					return
+				}
+				fmt.Println("Éxito:", res.Success)
+				fmt.Println("Mensaje:", res.Message)
 			}
-			defer file.Close()
-
-			res = c.sendStreamingRequest(file, []http.Header{
-				{"X-Force": {"true"}},
-			}, api.ActionUpdateData, path)
-			fmt.Println("Éxito:", res.Success)
-			fmt.Println("Mensaje:", res.Message)
 		}
 	}
 }
@@ -399,4 +428,16 @@ func (c *client) sendRequest(req api.Request, headers []http.Header, action stri
 		return api.Response{Success: false, Message: "Respuesta inválida del servidor"}
 	}
 	return res
+}
+
+func (c *client) uploadFile(filePath string, destPath string, force bool) (api.Response, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return api.Response{Success: false, Message: "No se ha podido abrir el fichero"}, fmt.Errorf("no se ha podido abrir el fichero: %w", err)
+	}
+	defer file.Close()
+	headers := []http.Header{{"X-Force": []string{fmt.Sprintf("%v", force)}}}
+
+	res := c.sendStreamingRequest(file, headers, api.ActionUpdateData, destPath)
+	return res, nil
 }
