@@ -59,10 +59,13 @@ func TestServer_RegisterLoginUpdateFetchLogout(t *testing.T) {
 	apiURL := ts.URL + "/api"
 
 	// Register
-	_, r1 := postJSON(t, apiURL, api.Request{
-		Action:   api.ActionRegister,
+	body, _ := json.Marshal(api.RegisterRequest{
 		Username: "alice",
 		Password: "pw",
+	})
+	_, r1 := postJSON(t, apiURL, api.Request{
+		Action: api.ActionRegister,
+		Body:   body,
 	})
 	if !r1.Success {
 		t.Fatalf("register falló: %s", r1.Message)
@@ -70,9 +73,8 @@ func TestServer_RegisterLoginUpdateFetchLogout(t *testing.T) {
 
 	// Login
 	_, r2 := postJSON(t, apiURL, api.Request{
-		Action:   api.ActionLogin,
-		Username: "alice",
-		Password: "pw",
+		Action: api.ActionLogin,
+		Body:   body,
 	})
 	if !r2.Success || r2.Token == "" {
 		t.Fatalf("login falló: success=%v msg=%q token=%q", r2.Success, r2.Message, r2.Token)
@@ -80,10 +82,9 @@ func TestServer_RegisterLoginUpdateFetchLogout(t *testing.T) {
 
 	// Update
 	_, r3 := postJSON(t, apiURL, api.Request{
-		Action:   api.ActionUpdateData,
-		Username: "alice",
-		Token:    r2.Token,
-		Data:     "secreto",
+		Action: api.ActionUpdateData,
+		Token:  r2.Token,
+		Data:   "secreto",
 	})
 	if !r3.Success {
 		t.Fatalf("update falló: %s", r3.Message)
@@ -91,9 +92,8 @@ func TestServer_RegisterLoginUpdateFetchLogout(t *testing.T) {
 
 	// Fetch
 	_, r4 := postJSON(t, apiURL, api.Request{
-		Action:   api.ActionFetchData,
-		Username: "alice",
-		Token:    r2.Token,
+		Action: api.ActionFetchData,
+		Token:  r2.Token,
 	})
 	if !r4.Success || r4.Data != "secreto" {
 		t.Fatalf("fetch falló: success=%v msg=%q data=%q", r4.Success, r4.Message, r4.Data)
@@ -101,9 +101,8 @@ func TestServer_RegisterLoginUpdateFetchLogout(t *testing.T) {
 
 	// Logout
 	_, r5 := postJSON(t, apiURL, api.Request{
-		Action:   api.ActionLogout,
-		Username: "alice",
-		Token:    r2.Token,
+		Action: api.ActionLogout,
+		Token:  r2.Token,
 	})
 	if !r5.Success {
 		t.Fatalf("logout falló: %s", r5.Message)
@@ -111,9 +110,8 @@ func TestServer_RegisterLoginUpdateFetchLogout(t *testing.T) {
 
 	// Token ya no vale
 	_, r6 := postJSON(t, apiURL, api.Request{
-		Action:   api.ActionFetchData,
-		Username: "alice",
-		Token:    r2.Token,
+		Action: api.ActionFetchData,
+		Token:  r2.Token,
 	})
 	if r6.Success {
 		t.Fatalf("esperado fallo tras logout")
