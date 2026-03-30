@@ -192,24 +192,59 @@ func (c *client) loginUser() {
 // El servidor devuelve la data asociada al usuario logueado.
 func (c *client) fetchData() {
 	ui.ClearScreen()
-	fmt.Println("** Obtener datos del usuario **")
+	fmt.Println("** Descargar archivo del servidor **")
 
-	// Chequeo básico de que haya sesión
 	if c.currentUser == "" || c.authToken == "" {
 		fmt.Println("No estás logueado. Inicia sesión primero.")
 		return
 	}
 
-	// Hacemos la request con ActionFetchData
-	res := c.sendRequest(api.Request{}, nil, api.ActionFetchData)
+	rutaServidor := ui.ReadInput("Introduce la ruta del archivo que quieres descargar del servidor (ej: /docs/miarchivo.txt)")
+	rutaLocal := ui.ReadInput("Introduce la ruta local donde quieres guardar el archivo (ej: ./miarchivo.txt)")
 
-	fmt.Println("Éxito:", res.Success)
-	fmt.Println("Mensaje:", res.Message)
+	// Preparar paquete de petición
+	reqBody, _ := json.Marshal(api.FetchDataRequest{Path: rutaServidor})
+	req := api.Request{Body: reqBody}
+	jsonData, _ := json.Marshal(req)
 
-	// Si fue exitoso, mostramos la data recibida
-	if res.Success {
-		fmt.Println("Tus datos:", res.Data)
+	// Preparar conexión HTTP`
+	httpReq, err := http.NewRequest(http.MethodPost, c.server, bytes.NewBuffer(jsonData))
+	if err != nil {
+		c.log.Println("No se ha podido construir la petición HTTP:", err)
+		return
 	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Action", api.ActionFetchData)
+	httpReq.Header.Set("X-Token", c.authToken)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		fmt.Println("Error conectando con el servidor:", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		errorMsg, _ := io.ReadAll(resp.Body)
+		fmt.Printf("Error del servidor: %s\n", string(errorMsg))
+		return
+	}
+
+	file, err := os.Create(rutaLocal)
+	if err != nil {
+		fmt.Println("Error creando el archivo en el disco:", err)
+		return
+	}
+	defer file.Close()
+
+	_, err = io.Copy(file, resp.Body)
+	if err != nil {
+		fmt.Println("Error guardando los datos descargados:", err)
+		return
+	}
+
+	fmt.Println("Archivo guardado correctamente en:", rutaLocal)
 }
 
 // updateData pide nuevo texto y lo envía al servidor con ActionUpdateData.
