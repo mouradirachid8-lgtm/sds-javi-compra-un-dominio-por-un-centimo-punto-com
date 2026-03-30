@@ -70,6 +70,7 @@ func (c *client) runLoop() {
 			options = []string{
 				"Ver datos",
 				"Actualizar datos",
+				"Borrar datos",
 				"Cerrar sesión",
 				"Salir",
 			}
@@ -99,8 +100,10 @@ func (c *client) runLoop() {
 			case 2:
 				c.updateData()
 			case 3:
-				c.logoutUser()
+				c.deleteData()
 			case 4:
+				c.logoutUser()
+			case 5:
 				// Opción Salir
 				c.log.Println("Saliendo del cliente...")
 				return
@@ -440,4 +443,27 @@ func (c *client) uploadFile(filePath string, destPath string, force bool) (api.R
 
 	res := c.sendStreamingRequest(file, headers, api.ActionUpdateData, destPath)
 	return res, nil
+}
+
+func (c *client) deleteData() {
+	ui.ClearScreen()
+	fmt.Println("** Borrar datos del usuario **")
+
+	if c.currentUser == "" || c.authToken == "" {
+		fmt.Println("No estás logueado. Inicia sesión primero.")
+		return
+	}
+
+	targetPath := ui.ReadInput("Introduce la ruta del fichero que quieres borrar en el servidor (ej: /docs/miarchivo.txt)")
+
+	body, _ := json.Marshal(api.DeleteDataRequest{
+		Path: targetPath,
+	})
+
+	res := c.sendRequest(api.Request{
+		Body: body,
+	}, nil, api.ActionDeleteData)
+
+	fmt.Println("Éxito:", res.Success)
+	fmt.Println("Mensaje:", res.Message)
 }

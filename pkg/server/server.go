@@ -130,6 +130,8 @@ func (s *server) jsonHandler(w http.ResponseWriter, r *http.Request) {
 		res = s.loginUser(req)
 	case api.ActionFetchData:
 		res = s.fetchData(req, token)
+	case api.ActionDeleteData:
+		res = s.deleteData(req, token)
 	case api.ActionLogout:
 		res = s.logoutUser(req, token)
 	default:
@@ -412,4 +414,55 @@ func (s *server) saveFile(body io.ReadCloser, username string, force bool, path 
 	}
 
 	return nil
+}
+
+func (s *server) deleteData(req api.Request, token string) api.Response {
+	if token == "" {
+		return api.Response{Success: false, Message: "Faltan credenciales"}
+	}
+	valid, username := s.isTokenValid(token)
+	if !valid {
+		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+	}
+
+	var delReq api.DeleteDataRequest
+	if err := json.Unmarshal(req.Body, &delReq); err != nil {
+		return api.Response{Success: false, Message: "Error al procesar la solicitud"}
+	}
+
+	path := strings.ReplaceAll(delReq.Path, "\\", "/")
+	path = strings.TrimSpace(path)
+	if strings.Contains(path, "..") {
+		return api.Response{Success: false, Message: "No se admite '..' en la ruta"}
+	}
+
+	if filepath.IsAbs(path) || (len(path) >= 2 && path[1] == ':') {
+		path = filepath.Base(path)
+	}
+
+	// copia pega de saveFile
+	path = strings.TrimPrefix(path, "/")
+	path = "/" + username + "/" + path
+	path = strings.ReplaceAll(path, "//", "/")
+
+	_, err := s.db.Get("userdata", []byte(path))
+	if err != nil {
+		return api.Response{Success: false, Message: "El archivo no existe"}
+	}
+
+	// 1. Borramos el archivo del sistema
+	fullSystemPath := s.basePath + path
+	if err := os.Remove(fullSystemPath); err != nil && !os.IsNotExist(err) {
+		s.log.Printf("Error al borrar fichero físico %s: %v", fullSystemPath, err)
+		return api.Response{Success: false, Message: "Error interno al borrar el archivo físico"}
+	}
+
+	// 2. Borramos el registro de la bd
+	if err := s.db.Delete("userdata", []byte(path)); err != nil {
+		s.log.Printf("Error al borrar de BD para %s: %v", path, err)
+		return api.Response{Success: false, Message: "Error al actualizar la base de datos"}
+	}
+
+	s.log.Printf("Archivo borrado para usuario '%s' en path '%s'", username, path)
+	return api.Response{Success: true, Message: "Archivo borrado correctamente"}
 }
