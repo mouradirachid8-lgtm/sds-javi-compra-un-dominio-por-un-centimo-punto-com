@@ -14,6 +14,7 @@ const (
 	ActionUpdateData = "updateData"
 	ActionLogout     = "logout"
 	ActionLookup     = "lookup"
+	ActionDeleteData = "deleteData"
 )
 
 var allowedActions = map[string]struct{}{
@@ -23,6 +24,7 @@ var allowedActions = map[string]struct{}{
 	ActionUpdateData: {},
 	ActionLogout:     {},
 	ActionLookup:     {},
+	ActionDeleteData: {},
 }
 
 func IsValidAction(action string) bool {
@@ -91,4 +93,8 @@ type FetchDataResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
 	File    File   `json:"file,omitempty"` // Si Success es true, File contiene el fichero solicitado, incluyendo su contenido.
+}
+
+type DeleteDataRequest struct {
+	Path string `json:"path"`
 }
