@@ -454,7 +454,7 @@ func (c *client) deleteData() {
 		return
 	}
 
-	targetPath := ui.ReadInput("Introduce la ruta del fichero que quieres borrar en el servidor (ej: /docs/miarchivo.txt)")
+	targetPath := ui.ReadInput("Introduce la ruta del fichero o carpeta que quieres borrar (ej: /docs/miarchivo.txt o /docs)")
 
 	body, _ := json.Marshal(api.DeleteDataRequest{
 		Path: targetPath,

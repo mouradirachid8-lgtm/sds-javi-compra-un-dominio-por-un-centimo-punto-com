@@ -417,6 +417,7 @@ func (s *server) saveFile(body io.ReadCloser, username string, force bool, path 
 }
 
 func (s *server) deleteData(req api.Request, token string) api.Response {
+	// 1. Chequeo de credenciales
 	if token == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
@@ -430,39 +431,67 @@ func (s *server) deleteData(req api.Request, token string) api.Response {
 		return api.Response{Success: false, Message: "Error al procesar la solicitud"}
 	}
 
-	path := strings.ReplaceAll(delReq.Path, "\\", "/")
-	path = strings.TrimSpace(path)
-	if strings.Contains(path, "..") {
+	// 2. Saneamiento de la ruta (Seguridad)
+	target := strings.ReplaceAll(delReq.Path, "\\", "/")
+	target = strings.TrimSpace(target)
+	
+	// Prevenir Path Traversal (evitar que suban niveles fuera de su carpeta)
+	if strings.Contains(target, "..") {
 		return api.Response{Success: false, Message: "No se admite '..' en la ruta"}
 	}
 
-	if filepath.IsAbs(path) || (len(path) >= 2 && path[1] == ':') {
-		path = filepath.Base(path)
+	if filepath.IsAbs(target) || (len(target) >= 2 && target[1] == ':') {
+		target = filepath.Base(target)
 	}
 
-	// copia pega de saveFile
-	path = strings.TrimPrefix(path, "/")
-	path = "/" + username + "/" + path
-	path = strings.ReplaceAll(path, "//", "/")
+	// copidoa de saveFile
+	target = strings.TrimPrefix(target, "/")
+	dbPath := "/" + username + "/" + target
+	dbPath = strings.ReplaceAll(dbPath, "//", "/")
 
-	_, err := s.db.Get("userdata", []byte(path))
+	// Seguridad: Evitar que el usuario borre su carpeta raíz completa
+	if dbPath == "/"+username || dbPath == "/"+username+"/" {
+		return api.Response{Success: false, Message: "No tienes permiso para borrar tu directorio raíz completo"}
+	}
+
+	fullSystemPath := s.basePath + dbPath
+
+	// Comprobar si existe 
+	stat, err := os.Stat(fullSystemPath)
 	if err != nil {
-		return api.Response{Success: false, Message: "El archivo no existe"}
+		if os.IsNotExist(err) {
+			return api.Response{Success: false, Message: "El archivo o carpeta no existe"}
+		}
+		return api.Response{Success: false, Message: "Error al acceder a la ruta"}
 	}
 
-	// 1. Borramos el archivo del sistema
-	fullSystemPath := s.basePath + path
-	if err := os.Remove(fullSystemPath); err != nil && !os.IsNotExist(err) {
-		s.log.Printf("Error al borrar fichero físico %s: %v", fullSystemPath, err)
-		return api.Response{Success: false, Message: "Error interno al borrar el archivo físico"}
+	// Recopilar las rutas para limpiar la base de datos
+	pathsToDelete := []string{dbPath} 
+
+	if stat.IsDir() {
+		// Si es carpeta, buscamos todos los archivos de dentro para limpiarlos de la BD
+		filepath.Walk(fullSystemPath, func(fsPath string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() {
+				// Convertimos la ruta física a la ruta relativa de la BD
+				relPath, _ := filepath.Rel(s.basePath, fsPath)
+				relPath = filepath.ToSlash(relPath)
+				pathsToDelete = append(pathsToDelete, "/"+relPath)
+			}
+			return nil
+		})
 	}
 
-	// 2. Borramos el registro de la bd
-	if err := s.db.Delete("userdata", []byte(path)); err != nil {
-		s.log.Printf("Error al borrar de BD para %s: %v", path, err)
-		return api.Response{Success: false, Message: "Error al actualizar la base de datos"}
+	// Borramos del disco 
+	if err := os.RemoveAll(fullSystemPath); err != nil {
+		s.log.Printf("Error al borrar físico %s: %v", fullSystemPath, err)
+		return api.Response{Success: false, Message: "Error interno al borrar en el disco"}
 	}
 
-	s.log.Printf("Archivo borrado para usuario '%s' en path '%s'", username, path)
-	return api.Response{Success: true, Message: "Archivo borrado correctamente"}
+	// Borramos los registros de la db
+	for _, p := range pathsToDelete {
+		_ = s.db.Delete("userdata", []byte(p)) 
+	}
+
+	s.log.Printf("Borrado completado para usuario '%s' en path '%s' (Es dir: %v)", username, dbPath, stat.IsDir())
+	return api.Response{Success: true, Message: "Borrado completado correctamente"}
 }
