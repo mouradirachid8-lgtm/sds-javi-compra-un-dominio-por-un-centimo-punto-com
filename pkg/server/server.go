@@ -434,8 +434,20 @@ func (s *server) streamFetchData(w http.ResponseWriter, req api.Request, token s
 	}
 
 	path := strings.ReplaceAll(fetchReq.Path, "\\", "/")
+	path = strings.TrimSpace(path)
+
+	if strings.Contains(path, "..") {
+		http.Error(w, "Ruta no permitida (no se admite '..')", http.StatusBadRequest)
+		return
+	}
+
+	if filepath.IsAbs(path) || (len(path) >= 2 && path[1] == ':') {
+		path = filepath.Base(path)
+	}
+	
 	path = strings.TrimPrefix(path, "/")
 	dbPath := "/" + username + "/" + path
+	dbPath = strings.ReplaceAll(dbPath, "//", "/")
 
 	// Buscar archivo en base de datos
 	_, err := s.db.Get("userdata", []byte(dbPath))
