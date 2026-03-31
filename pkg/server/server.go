@@ -129,7 +129,8 @@ func (s *server) jsonHandler(w http.ResponseWriter, r *http.Request) {
 	case api.ActionLogin:
 		res = s.loginUser(req)
 	case api.ActionFetchData:
-		res = s.fetchData(req, token)
+		s.streamFetchData(w, req, token)
+		return
 	case api.ActionLogout:
 		res = s.logoutUser(req, token)
 	default:
@@ -412,4 +413,58 @@ func (s *server) saveFile(body io.ReadCloser, username string, force bool, path 
 	}
 
 	return nil
+}
+
+func (s *server) streamFetchData(w http.ResponseWriter, req api.Request, token string) {
+	if token == "" {
+		http.Error(w, "Faltan credenciales", http.StatusUnauthorized)
+		return
+	}
+	valid, username := s.isTokenValid(token)
+	if !valid {
+		http.Error(w, "Token inválido o expirado", http.StatusUnauthorized)
+		return
+	}
+
+	// Busca el archivo que solicita descargar el cliente
+	var fetchReq api.FetchDataRequest
+	if err := json.Unmarshal(req.Body, &fetchReq); err != nil {
+		http.Error(w, "Error leyendo la petición", http.StatusBadRequest)
+		return
+	}
+
+	path := strings.ReplaceAll(fetchReq.Path, "\\", "/")
+	path = strings.TrimSpace(path)
+
+	if strings.Contains(path, "..") {
+		http.Error(w, "Ruta no permitida (no se admite '..')", http.StatusBadRequest)
+		return
+	}
+
+	if filepath.IsAbs(path) || (len(path) >= 2 && path[1] == ':') {
+		path = filepath.Base(path)
+	}
+	
+	path = strings.TrimPrefix(path, "/")
+	dbPath := "/" + username + "/" + path
+	dbPath = strings.ReplaceAll(dbPath, "//", "/")
+
+	// Buscar archivo en base de datos
+	_, err := s.db.Get("userdata", []byte(dbPath))
+	if err != nil {
+		http.Error(w, "Archivo no encontrado o sin permisos", http.StatusNotFound)
+		return
+	}
+
+	// Preparar transferencia del archivo
+	physicalPath := s.basePath + dbPath
+	file, err := os.Open(physicalPath)
+	if err != nil {
+		http.Error(w, "Error interno al abrir el archivo físico", http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+
+	w.Header().Set("Content-Type", "application/octet-stream") // Porque estamos pasando un archivo binario
+	io.Copy(w, file)                                           // Pasamos poco a poco la información del archivo
 }

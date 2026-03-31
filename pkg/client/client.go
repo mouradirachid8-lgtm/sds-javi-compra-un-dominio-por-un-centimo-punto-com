@@ -192,24 +192,60 @@ func (c *client) loginUser() {
 // El servidor devuelve la data asociada al usuario logueado.
 func (c *client) fetchData() {
 	ui.ClearScreen()
-	fmt.Println("** Obtener datos del usuario **")
+	fmt.Println("** Descargar archivo del servidor **")
 
-	// Chequeo básico de que haya sesión
 	if c.currentUser == "" || c.authToken == "" {
 		fmt.Println("No estás logueado. Inicia sesión primero.")
 		return
 	}
 
-	// Hacemos la request con ActionFetchData
-	res := c.sendRequest(api.Request{}, nil, api.ActionFetchData)
+	remotePath := ui.ReadInput("Ruta del archivo en el servidor (ej: archivo.txt)")
+	localPath := ui.ReadInput("Dónde guardarlo en tu PC (ej: ./descargado.txt)")
 
-	fmt.Println("Éxito:", res.Success)
-	fmt.Println("Mensaje:", res.Message)
+	// Preparamos el JSON pidiendo el archivo que queremos descargar
+	reqBody, _ := json.Marshal(api.FetchDataRequest{Path: remotePath})
+	req := api.Request{Body: reqBody}
+	jsonData, _ := json.Marshal(req)
 
-	// Si fue exitoso, mostramos la data recibida
-	if res.Success {
-		fmt.Println("Tus datos:", res.Data)
+	// Conectamos la tubería hacia el servidor
+	httpReq, err := http.NewRequest(http.MethodPost, c.server, bytes.NewBuffer(jsonData))
+	if err != nil {
+		fmt.Println("Error creando la petición:", err)
+		return
 	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Action", api.ActionFetchData)
+	httpReq.Header.Set("X-Token", c.authToken)
+
+	// Enviamos la petición
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		fmt.Println("Error conectando con el servidor:", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Printf("Error del servidor (Código %d). Puede que el archivo no exista.\n", resp.StatusCode)
+		return
+	}
+
+	// Creamos un archivo en el disco duro del cliente para ir recibiendo la información
+	file, err := os.Create(localPath)
+	if err != nil {
+		fmt.Println("Error creando el archivo local:", err)
+		return
+	}
+	defer file.Close()
+
+	// Vamos almacenando en el archivo creado los datos que vamos recibiendo del servidor
+	_, err = io.Copy(file, resp.Body)
+	if err != nil {
+		fmt.Println("Error guardando los datos:", err)
+		return
+	}
+
+	fmt.Println("Archivo descargado correctamente y guardado en:", localPath)
 }
 
 // updateData pide nuevo texto y lo envía al servidor con ActionUpdateData.
