@@ -129,7 +129,8 @@ func (s *server) jsonHandler(w http.ResponseWriter, r *http.Request) {
 	case api.ActionLogin:
 		res = s.loginUser(req)
 	case api.ActionFetchData:
-		res = s.fetchData(req, token)
+		s.streamFetchData(w, req, token)
+		return
 	case api.ActionDeleteData:
 		res = s.deleteData(req, token)
 	case api.ActionLogout:
@@ -434,7 +435,7 @@ func (s *server) deleteData(req api.Request, token string) api.Response {
 	// 2. Saneamiento de la ruta (Seguridad)
 	target := strings.ReplaceAll(delReq.Path, "\\", "/")
 	target = strings.TrimSpace(target)
-	
+
 	// Prevenir Path Traversal (evitar que suban niveles fuera de su carpeta)
 	if strings.Contains(target, "..") {
 		return api.Response{Success: false, Message: "No se admite '..' en la ruta"}
@@ -456,7 +457,7 @@ func (s *server) deleteData(req api.Request, token string) api.Response {
 
 	fullSystemPath := s.basePath + dbPath
 
-	// Comprobar si existe 
+	// Comprobar si existe
 	stat, err := os.Stat(fullSystemPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -466,7 +467,7 @@ func (s *server) deleteData(req api.Request, token string) api.Response {
 	}
 
 	// Recopilar las rutas para limpiar la base de datos
-	pathsToDelete := []string{dbPath} 
+	pathsToDelete := []string{dbPath}
 
 	if stat.IsDir() {
 		// Si es carpeta, buscamos todos los archivos de dentro para limpiarlos de la BD
@@ -481,7 +482,7 @@ func (s *server) deleteData(req api.Request, token string) api.Response {
 		})
 	}
 
-	// Borramos del disco 
+	// Borramos del disco
 	if err := os.RemoveAll(fullSystemPath); err != nil {
 		s.log.Printf("Error al borrar físico %s: %v", fullSystemPath, err)
 		return api.Response{Success: false, Message: "Error interno al borrar en el disco"}
@@ -489,7 +490,7 @@ func (s *server) deleteData(req api.Request, token string) api.Response {
 
 	// Borramos los registros de la db
 	for _, p := range pathsToDelete {
-		_ = s.db.Delete("userdata", []byte(p)) 
+		_ = s.db.Delete("userdata", []byte(p))
 	}
 
 	s.log.Printf("Borrado completado para usuario '%s' en path '%s' (Es dir: %v)", username, dbPath, stat.IsDir())
@@ -524,7 +525,7 @@ func (s *server) streamFetchData(w http.ResponseWriter, req api.Request, token s
 	if filepath.IsAbs(path) || (len(path) >= 2 && path[1] == ':') {
 		path = filepath.Base(path)
 	}
-	
+
 	path = strings.TrimPrefix(path, "/")
 	dbPath := "/" + username + "/" + path
 	dbPath = strings.ReplaceAll(dbPath, "//", "/")
