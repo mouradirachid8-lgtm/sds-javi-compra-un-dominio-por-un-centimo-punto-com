@@ -4,6 +4,8 @@ package client
 
 import (
 	"bytes"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,16 +30,28 @@ type client struct {
 }
 
 // Run es la única función exportada de este paquete.
-// Crea un client interno y ejecuta el bucle principal.
-func Run() {
-	// Creamos un logger con prefijo 'cli' para identificar
-	// los mensajes en la consola.
+// Recibe el certificado TLS del servidor en formato PEM para establecer
+// una conexión HTTPS de confianza sin depender de una CA pública.
+func Run(certPEM []byte) {
+	// Construimos un pool de CAs que solo contiene el certificado del servidor.
+	// Así el cliente acepta únicamente ese cert y rechaza cualquier otro.
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(certPEM)
+
+	tlsConfig := &tls.Config{
+		RootCAs:    pool,
+		MinVersion: tls.VersionTLS12,
+	}
+
 	c := &client{
 		log: log.New(os.Stdout, "[cli] ", log.LstdFlags),
 		httpClient: &http.Client{
 			Timeout: 5 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: tlsConfig,
+			},
 		},
-		server: "http://localhost:8080/api",
+		server: "https://localhost:8080/api",
 	}
 	c.runLoop()
 }
