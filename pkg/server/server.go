@@ -3,7 +3,6 @@
 package server
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -168,7 +167,7 @@ func (s *server) fileHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(res)
 }
 
-// generateToken crea un token único incrementando un contador interno (inseguro)
+/* generateToken crea un token único incrementando un contador interno (inseguro)
 func (s *server) generateToken(username string) string {
 	// atomic es necesario al haber paralelismo en las peticiones HTTP.
 	n, err := rand.Int(rand.Reader, INT64_MAX)
@@ -179,6 +178,7 @@ func (s *server) generateToken(username string) string {
 	//id := atomic.AddInt64(&s.tokenCounter, 1)
 	return fmt.Sprintf("token_%d+%s", id, username)
 }
+*/
 
 // registerUser registra un nuevo usuario, si no existe.
 // - Guardamos la contraseña en el namespace 'auth'
@@ -242,7 +242,7 @@ func (s *server) loginUser(req api.Request) api.Response {
 	}
 
 	// Generamos un nuevo token, lo guardamos en 'sessions'
-	token := s.generateToken(loginReq.Username)
+	token, _ := NewRandomToken()
 	if err := s.db.Put("sessions", []byte(token), []byte(loginReq.Username)); err != nil {
 		return api.Response{Success: false, Message: "Error al crear sesión"}
 	}
