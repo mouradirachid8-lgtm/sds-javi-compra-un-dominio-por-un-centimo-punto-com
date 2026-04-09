@@ -204,7 +204,9 @@ func (s *server) registerUser(req api.Request) api.Response {
 	}
 
 	// Almacenamos la contraseña en el namespace 'auth' (clave=nombre, valor=contraseña)
-	if err := s.db.Put("auth", []byte(regReq.Username), []byte(regReq.Password)); err != nil {
+	hashedPassword, _ := HashPassword(regReq.Password)
+
+	if err := s.db.Put("auth", []byte(regReq.Username), []byte(hashedPassword)); err != nil {
 		return api.Response{Success: false, Message: "Error al guardar credenciales"}
 	}
 
@@ -234,7 +236,8 @@ func (s *server) loginUser(req api.Request) api.Response {
 	}
 
 	// Comparamos
-	if string(storedPass) != loginReq.Password {
+	password_ok := VerifyPassword(loginReq.Password, string(storedPass))
+	if password_ok {
 		return api.Response{Success: false, Message: "Credenciales inválidas"}
 	}
 
