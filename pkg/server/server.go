@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"sprout/pkg/api"
 	"sprout/pkg/store"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -242,7 +241,7 @@ func (s *server) loginUser(req api.Request) api.Response {
 	}
 
 	// Generamos un nuevo token, lo guardamos en 'sessions'
-	token, _ := NewRandomToken()
+	token, _ := s.NewRandomToken()
 	if err := s.db.Put("sessions", []byte(token), []byte(loginReq.Username)); err != nil {
 		return api.Response{Success: false, Message: "Error al crear sesión"}
 	}
@@ -324,30 +323,6 @@ func (s *server) userExists(username string) (bool, error) {
 		return false, err
 	}
 	return true, nil
-}
-
-// isTokenValid comprueba que el token almacenado en 'sessions'
-// coincida con el token proporcionado.
-func (s *server) isTokenValid(token string) (bool, string) {
-	codePart, extractedUsername, ok := strings.Cut(token, "+")
-	if !ok {
-		return false, ""
-	}
-
-	idStr := strings.TrimPrefix(codePart, "token_")
-	_, errParse := strconv.ParseInt(idStr, 10, 64)
-	if errParse != nil {
-		return false, ""
-	}
-	username, err := s.db.Get("sessions", []byte(token))
-	if err != nil {
-		return false, ""
-	}
-	if string(username) == extractedUsername {
-		return true, extractedUsername
-	} else {
-		return false, ""
-	}
 }
 
 func (s *server) saveFile(body io.ReadCloser, username string, force bool, path string) error {

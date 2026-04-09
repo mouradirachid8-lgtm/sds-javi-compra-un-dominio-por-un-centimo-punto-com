@@ -75,9 +75,9 @@ func VerifyPassword(password, encoded string) bool {
 }
 
 /*
-Para generar tokens aleatorios
+Genera tokens aleatorios
 */
-func NewRandomToken() (string, error) {
+func (s *server) NewRandomToken() (string, error) {
 	buf := make([]byte, size)
 	if _, err := rand.Read(buf); err != nil {
 		return "", fmt.Errorf("no se pudo generar un token aleatorio: %w", err)
@@ -85,4 +85,20 @@ func NewRandomToken() (string, error) {
 	// Se codifica en hexadecimal solo para poder imprimir y transportar el token
 	// fácilmente en la demo sin perder aleatoriedad.
 	return hex.EncodeToString(buf), nil
+}
+
+/*
+Comprueba que el token almacenado en 'sessions'coincida con el token proporcionado.
+*/
+func (s *server) isTokenValid(token string) (bool, string) {
+	if token == "" {
+		return false, ""
+	}
+
+	username, err := s.db.Get("sessions", []byte(token))
+	if err != nil {
+		return false, ""
+	}
+
+	return true, string(username)
 }
