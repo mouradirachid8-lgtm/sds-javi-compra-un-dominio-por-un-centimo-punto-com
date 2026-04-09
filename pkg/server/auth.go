@@ -88,7 +88,7 @@ func (s *server) NewRandomToken() (string, error) {
 }
 
 /*
-Comprueba que el token almacenado en 'sessions'coincida con el token proporcionado.
+Comprueba que el token almacenado en 'sessions' coincida con el token proporcionado.
 */
 func (s *server) isTokenValid(token string) (bool, string) {
 	if token == "" {
