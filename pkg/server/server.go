@@ -237,7 +237,7 @@ func (s *server) loginUser(req api.Request) api.Response {
 
 	// Comparamos
 	password_ok := VerifyPassword(loginReq.Password, string(storedPass))
-	if password_ok {
+	if !password_ok {
 		return api.Response{Success: false, Message: "Credenciales inválidas"}
 	}
 
