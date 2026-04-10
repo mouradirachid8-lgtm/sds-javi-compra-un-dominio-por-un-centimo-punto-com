@@ -128,6 +128,8 @@ func (s *server) jsonHandler(w http.ResponseWriter, r *http.Request) {
 		res = s.registerUser(req)
 	case api.ActionLogin:
 		res = s.loginUser(req)
+	case api.ActionLookup:
+		res = s.lookup(req, token)
 	case api.ActionFetchData:
 		s.streamFetchData(w, req, token)
 		return
@@ -245,6 +247,63 @@ func (s *server) loginUser(req api.Request) api.Response {
 	}
 
 	return api.Response{Success: true, Message: "Login exitoso", Token: token}
+}
+
+// lookup lista los archivos en un directorio específico del usuario.
+func (s *server) lookup(req api.Request, token string) api.Response {
+	// Chequeo de credenciales
+	if token == "" {
+		return api.Response{Success: false, Message: "Faltan credenciales"}
+	}
+	valid, username := s.isTokenValid(token)
+	if !valid {
+		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+	}
+
+	var lookupReq api.LookupRequest
+	if err := json.Unmarshal(req.Body, &lookupReq); err != nil {
+		return api.Response{Success: false, Message: "Error al procesar la solicitud"}
+	}
+
+	// Saneamiento de la ruta (Seguridad)
+	path := strings.TrimPrefix(strings.ReplaceAll(lookupReq.Path, "\\", "/"), "/")
+	if strings.Contains(path, "..") {
+		return api.Response{Success: false, Message: "No se admite '..' en la ruta"}
+	}
+
+	if filepath.IsAbs(path) || (len(path) >= 2 && path[1] == ':') {
+		path = ""
+	}
+
+	prefix := "/" + username + "/"
+	if path != "" {
+		prefix += strings.TrimSuffix(path, "/") + "/"
+	}
+
+	// Listamos las claves que empiecen con el prefijo del directorio del usuario
+	rawKeys, err := s.db.KeysByPrefix("userdata", []byte(prefix))
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al obtener archivos"}
+	}
+
+	files := make([]api.File, 0, len(rawKeys))
+	for _, key := range rawKeys {
+		data, err := s.db.Get("userdata", key)
+		if err != nil {
+			continue
+		}
+		var f api.File
+		if json.Unmarshal(data, &f) == nil {
+			files = append(files, f)
+		}
+	}
+
+	payload, _ := json.Marshal(files)
+	return api.Response{
+		Success: true,
+		Message: "Archivos listados",
+		Data:    string(payload),
+	}
 }
 
 // fetchData verifica el token y retorna el contenido del namespace 'userdata'.
