@@ -15,17 +15,14 @@ import (
 Argon2id está pensado para almacenamiento seguro de contraseñas.
 En lugar de guardar la contraseña original, se guarda una sal aleatoria
 junto con el hash derivado.
-
-Este ejemplo usa parámetros pequeños para que la demo sea rápida,
-pero suficientes para ilustrar el proceso.
 */
 const (
-	argonTime    uint32 = 1
-	argonMemory  uint32 = 64 * 1024
-	argonThreads uint8  = 4
-	argonKeyLen  uint32 = 32
-	saltLen             = 16
-	size         int    = 32
+	argonTime    uint32 = 2         // numero de veces que se aplica el algoritmo
+	argonMemory  uint32 = 64 * 1024 // memoria usada por el algoritmo
+	argonThreads uint8  = 4         // numero de hilos sobre los que se aplica el algoritmo
+	argonKeyLen  uint32 = 32        // tamaño del hash que se genera
+	saltLen             = 16        // tamaño del num aleatorio que se mezcla con la contraseña para generar el hash
+	tokenLen     int    = 32        // tamaño del token
 )
 
 /*
@@ -78,7 +75,7 @@ func VerifyPassword(password, encoded string) bool {
 Genera tokens aleatorios
 */
 func (s *server) NewRandomToken() (string, error) {
-	buf := make([]byte, size)
+	buf := make([]byte, tokenLen)
 	if _, err := rand.Read(buf); err != nil {
 		return "", fmt.Errorf("no se pudo generar un token aleatorio: %w", err)
 	}

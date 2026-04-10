@@ -166,19 +166,6 @@ func (s *server) fileHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(res)
 }
 
-/* generateToken crea un token único incrementando un contador interno (inseguro)
-func (s *server) generateToken(username string) string {
-	// atomic es necesario al haber paralelismo en las peticiones HTTP.
-	n, err := rand.Int(rand.Reader, INT64_MAX)
-	if err != nil {
-		panic(err)
-	}
-	id := n.Int64()
-	//id := atomic.AddInt64(&s.tokenCounter, 1)
-	return fmt.Sprintf("token_%d+%s", id, username)
-}
-*/
-
 // registerUser registra un nuevo usuario, si no existe.
 // - Guardamos la contraseña en el namespace 'auth'
 // - Creamos entrada vacía en 'userdata' para el usuario
@@ -202,9 +189,13 @@ func (s *server) registerUser(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "El usuario ya existe"}
 	}
 
-	// Almacenamos la contraseña en el namespace 'auth' (clave=nombre, valor=contraseña)
-	hashedPassword, _ := HashPassword(regReq.Password)
+	// Hasheamos la contraseña
+	hashedPassword, err := HashPassword(regReq.Password)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al generar el hash"}
+	}
 
+	// Almacenamos la contraseña en el namespace 'auth' (clave=nombre, valor=contraseña)
 	if err := s.db.Put("auth", []byte(regReq.Username), []byte(hashedPassword)); err != nil {
 		return api.Response{Success: false, Message: "Error al guardar credenciales"}
 	}
@@ -240,8 +231,13 @@ func (s *server) loginUser(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Credenciales inválidas"}
 	}
 
-	// Generamos un nuevo token, lo guardamos en 'sessions'
-	token, _ := s.NewRandomToken()
+	// Generamos el nuevo token
+	token, err := s.NewRandomToken()
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al generar el token"}
+	}
+
+	// Almacenamos el token en el namespace 'sessions'
 	if err := s.db.Put("sessions", []byte(token), []byte(loginReq.Username)); err != nil {
 		return api.Response{Success: false, Message: "Error al crear sesión"}
 	}
