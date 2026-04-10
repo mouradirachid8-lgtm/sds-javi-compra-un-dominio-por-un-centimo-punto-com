@@ -287,13 +287,36 @@ func (s *server) lookup(req api.Request, token string) api.Response {
 	}
 
 	files := make([]api.File, 0, len(rawKeys))
+	seenDirs := make(map[string]bool) // Para evitar listar varias veces la misma carpeta
+
 	for _, key := range rawKeys {
+		remaining := strings.TrimPrefix(string(key), prefix)
+
+		// No listar recursivamente
+		if strings.Contains(remaining, "/") && !lookupReq.Recursive {
+			i := strings.Index(remaining, "/")
+			remaining = remaining[:i] + "/" // Añadimos la barra para indicar que es una carpeta
+
+			if seenDirs[remaining] {
+				continue
+			} else {
+				seenDirs[remaining] = true
+				files = append(files, api.File{
+					Name:        remaining,
+					IsDirectory: true,
+				})
+
+				continue
+			}
+		}
+
 		data, err := s.db.Get("userdata", key)
 		if err != nil {
 			continue
 		}
 		var f api.File
 		if json.Unmarshal(data, &f) == nil {
+			f.Name = remaining
 			files = append(files, f)
 		}
 	}

@@ -206,8 +206,9 @@ func (c *client) lookup() {
 	}
 
 	remotePath := ui.ReadInput("Ruta del directorio en el servidor (ej: dir/docs/)")
+	recursive := ui.ReadInput("¿Quieres que se muestren los archivos de forma recursiva? (s/n)")
 
-	body, _ := json.Marshal(api.LookupRequest{Path: remotePath})
+	body, _ := json.Marshal(api.LookupRequest{Path: remotePath, Recursive: recursive == "s"})
 	res := c.sendRequest(api.Request{Body: body}, nil, api.ActionLookup)
 
 	fmt.Println("Éxito:", res.Success)
@@ -217,7 +218,11 @@ func (c *client) lookup() {
 		if err := json.Unmarshal([]byte(res.Data), &files); err == nil {
 			fmt.Println("Archivos:")
 			for _, f := range files {
-				fmt.Printf("- %s (%d bytes, modificado: %s)\n", f.Name, f.Size, f.Modified.Format("2006-01-02 15:04:05"))
+				if f.IsDirectory {
+					fmt.Printf("- %s (directorio)\n", f.Name)
+				} else {
+					fmt.Printf("- %s (%d bytes, modificado: %s)\n", f.Name, f.Size, f.Modified.Format("2006-01-02 15:04:05"))
+				}
 			}
 		} else {
 			fmt.Println("Error al procesar la lista de archivos:", err)
