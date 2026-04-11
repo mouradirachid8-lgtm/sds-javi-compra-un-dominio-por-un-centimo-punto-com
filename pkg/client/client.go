@@ -66,10 +66,10 @@ func (c *client) runLoop() {
 				"Salir",
 			}
 		} else {
-			// Usuario activo: Ver datos, Actualizar datos, Logout, Salir
+			// Usuario activo: Listar archivos, Descargar datos, Actualizar datos, Borrar datos, Cerrar sesión, Salir
 			options = []string{
 				"Listar archivos",
-				"Ver datos",
+				"Descargar datos",
 				"Actualizar datos",
 				"Borrar datos",
 				"Cerrar sesión",

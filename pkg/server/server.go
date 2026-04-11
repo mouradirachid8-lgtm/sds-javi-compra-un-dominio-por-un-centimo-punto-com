@@ -267,6 +267,7 @@ func (s *server) lookup(req api.Request, token string) api.Response {
 
 	// Saneamiento de la ruta (Seguridad)
 	path := strings.TrimPrefix(strings.ReplaceAll(lookupReq.Path, "\\", "/"), "/")
+	path = strings.TrimSpace(path)
 	if strings.Contains(path, "..") {
 		return api.Response{Success: false, Message: "No se admite '..' en la ruta"}
 	}
@@ -321,7 +322,11 @@ func (s *server) lookup(req api.Request, token string) api.Response {
 		}
 	}
 
-	payload, _ := json.Marshal(files)
+	payload, err := json.Marshal(files)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al procesar la respuesta"}
+	}
+
 	return api.Response{
 		Success: true,
 		Message: "Archivos listados",
