@@ -36,20 +36,23 @@ func Run(certPEM []byte) {
 	// Construimos un pool de CAs que solo contiene el certificado del servidor.
 	// Así el cliente acepta únicamente ese cert y rechaza cualquier otro.
 	pool := x509.NewCertPool()
-	pool.AppendCertsFromPEM(certPEM)
+	if !pool.AppendCertsFromPEM(certPEM) {
+		log.Fatal("No se ha podido cargar el certificado TLS del servidor")
+	}
 
 	tlsConfig := &tls.Config{
 		RootCAs:    pool,
 		MinVersion: tls.VersionTLS12,
 	}
 
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tlsConfig
+
 	c := &client{
 		log: log.New(os.Stdout, "[cli] ", log.LstdFlags),
 		httpClient: &http.Client{
-			Timeout: 5 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: tlsConfig,
-			},
+			Timeout:   5 * time.Second,
+			Transport: transport,
 		},
 		server: "https://localhost:8080/api",
 	}

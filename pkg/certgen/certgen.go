@@ -20,9 +20,14 @@ func Generate() (certPEM, keyPEM []byte, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: serialNumber,
 		Subject: pkix.Name{
 			Organization: []string{"Ya tu sabes Dev"},
 			CommonName:   "localhost",
