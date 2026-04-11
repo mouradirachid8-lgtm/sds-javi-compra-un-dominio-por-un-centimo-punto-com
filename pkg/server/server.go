@@ -4,6 +4,7 @@ package server
 
 import (
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,8 +32,10 @@ var INT64_MAX = big.NewInt(0).SetInt64(1<<63 - 1)
 
 const maxUploadSize = 1000 << 20 // 1000 MiB por defecto
 
-// Run inicia la base de datos y arranca el servidor HTTP.
-func Run() error {
+// Run inicia la base de datos y arranca el servidor HTTPS con el certificado TLS proporcionado.
+// certPEM y keyPEM son el certificado y la clave privada en formato PEM,
+// generados por el paquete certgen.
+func Run(certPEM, keyPEM []byte) error {
 
 	// Crear la carpeta 'data' en caso de que no exista.
 	if err := os.MkdirAll("data", 0755); err != nil {
@@ -59,13 +62,24 @@ func Run() error {
 	mux := http.NewServeMux()
 	mux.Handle("/api", http.HandlerFunc(srv.apiHandler))
 
-	// Iniciamos el servidor HTTP.
+	// Cargamos el certificado TLS desde los PEM en memoria
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return fmt.Errorf("error cargando certificado TLS: %w", err)
+	}
+
+	// Iniciamos el servidor HTTPS.
 	httpSrv := &http.Server{
-		Addr:              ":8080",
-		Handler:           mux,
+		Addr:    ":8080",
+		Handler: mux,
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{tlsCert},
+			MinVersion:   tls.VersionTLS12,
+		},
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	return httpSrv.ListenAndServe()
+	// Pasamos strings vacíos porque ya configuramos TLSConfig.Certificates
+	return httpSrv.ListenAndServeTLS("", "")
 }
 
 // apiHandler decodifica la solicitud JSON, la despacha

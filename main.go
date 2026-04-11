@@ -15,6 +15,7 @@ import (
 	"os"
 	"time"
 
+	"sprout/pkg/certgen"
 	"sprout/pkg/client"
 	"sprout/pkg/server"
 	"sprout/pkg/ui"
@@ -24,13 +25,22 @@ func main() {
 
 	// Creamos un logger con prefijo 'main' para identificar
 	// los mensajes en la consola.
-	log := log.New(os.Stdout, "[main] ", log.LstdFlags)
+	logger := log.New(os.Stdout, "[main] ", log.LstdFlags)
 
-	// Inicia servidor en goroutine.
-	log.Println("Iniciando servidor...")
+	// Generamos el certificado TLS autofirmado en memoria.
+	// El mismo cert se pasa al servidor (para arrancar TLS) y al cliente
+	// (para hacer pinning y rechazar cualquier otro certificado).
+	certPEM, keyPEM, err := certgen.Generate()
+	if err != nil {
+		logger.Fatalf("Error generando certificado TLS: %v", err)
+	}
+	logger.Println("Certificado TLS generado correctamente.")
+
+	// Inicia servidor HTTPS en goroutine.
+	logger.Println("Iniciando servidor HTTPS...")
 	go func() {
-		if err := server.Run(); err != nil {
-			log.Fatalf("Error del servidor: %v\n", err)
+		if err := server.Run(certPEM, keyPEM); err != nil {
+			logger.Fatalf("Error del servidor: %v\n", err)
 		}
 	}()
 
@@ -41,7 +51,7 @@ func main() {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Inicia cliente.
-	log.Println("Iniciando cliente...")
-	client.Run()
+	// Inicia cliente con el cert del servidor para cert pinning.
+	logger.Println("Iniciando cliente...")
+	client.Run(certPEM)
 }
