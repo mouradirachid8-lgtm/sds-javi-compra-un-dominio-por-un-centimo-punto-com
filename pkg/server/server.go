@@ -467,10 +467,12 @@ func (s *server) saveFile(body io.ReadCloser, username string, force bool, path 
 	defer file.Close()
 	_, err = io.Copy(file, body) // Copiamos el contenido del body al fichero
 	if err != nil {
+		os.Remove(s.basePath + path)
 		return fmt.Errorf("error al copiar datos: %w", err)
 	}
 	stats, err := file.Stat()
 	if err != nil {
+		os.Remove(s.basePath + path)
 		return fmt.Errorf("error al obtener información del archivo: %w", err)
 	}
 	fileBytes, err := json.Marshal(api.File{
@@ -482,10 +484,12 @@ func (s *server) saveFile(body io.ReadCloser, username string, force bool, path 
 		IsDirectory: false,
 	})
 	if err != nil {
+		os.Remove(s.basePath + path)
 		return fmt.Errorf("error al serializar metadatos: %w", err)
 	}
 
 	if err := s.db.Put("userdata", []byte(path), fileBytes); err != nil {
+		os.Remove(s.basePath + path)
 		return fmt.Errorf("error al guardar archivo: %w", err)
 	}
 

@@ -374,8 +374,8 @@ func (c *client) recursiveUpload(localPath string, destBasePath string) (int, in
 	// Enviamos la solicitud de actualización
 	fmt.Println("Subiendo archivos: ")
 	//Como detecto el SO?
-	if !strings.HasSuffix(localPath, "\\") { // Añadimos \ (windows)
-		localPath += "\\"
+	if !strings.HasSuffix(localPath, string(os.PathSeparator)) {
+		localPath += string(os.PathSeparator)
 	}
 	count := 0
 	total := 0
