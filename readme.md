@@ -1,14 +1,9 @@
-# Funcionalidades actuales
-- Subir ficheros via streaming -> Elige un fichero -> Elige donde -> Si existe debes forzarlo, se guarda en la carpeta data
-- Cliente puede subir un directorio completo
-- Token sencillo: token_(numero al azar)+(nombre usuario)
-
 # Proyecto cifrado de disco duro virtual seguro
- - [ ] Arquitectura cliente/servidor, realizándose ambos en Go a partir del código proporcionado.  
- - [ ]  Mecanismo de autentificación seguro (gestión de contraseñas, identidades y sesión). 
- - [ ]  Transporte de red seguro entre cliente y servidor (HTTPS). 
+ - [x] Arquitectura cliente/servidor, realizándose ambos en Go a partir del código proporcionado.  
+ - [x]  Mecanismo de autentificación seguro (gestión de contraseñas, identidades y sesión). 
+ - [x]  Transporte de red seguro entre cliente y servidor (HTTPS). 
  - [ ]  Almacenamiento seguro (cifrado en descanso) en el servidor. 
- - [ ]  Gestión de los ficheros y carpetas (creación, borrado, etc.)
+ - [x]  Gestión de los ficheros y carpetas (creación, borrado, etc.)
 # Opcionales
  - [ ]  Cifrado punto a punto (el servidor no conoce las claves ni la información, todo el 
 cifrado/descifrado se realiza en el cliente de forma local). 
