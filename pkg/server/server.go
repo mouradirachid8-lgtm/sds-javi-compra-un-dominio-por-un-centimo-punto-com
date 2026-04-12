@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sprout/pkg/api"
+	"sprout/pkg/external_logger"
 	"sprout/pkg/store"
 	"strconv"
 	"strings"
@@ -48,15 +49,41 @@ func Run(certPEM, keyPEM []byte) error {
 		return fmt.Errorf("error abriendo base de datos: %v", err)
 	}
 
-	// Creamos nuestro servidor con su logger con prefijo 'srv'
+	// Configuramos el logger asíncrono si está definido por variables de entorno
+	loggerPrefix := "[srv] "
+	var srvLog *log.Logger
+	var closeLog func()
+
+	logEndpoint := os.Getenv("LOG_SERVER_ENDPOINT")
+	logAuthEndpoint := os.Getenv("LOG_SERVER_AUTH_ENDPOINT")
+
+	if logEndpoint != "" {
+		extLog, closeFn, extErr := external_logger.NewExternalLogger(logEndpoint, logAuthEndpoint)
+		if extErr == nil {
+			srvLog = extLog
+			closeLog = closeFn
+		} else {
+			// Fallback silencioso a consola estándar si falla el logger
+			srvLog = log.New(os.Stdout, loggerPrefix, log.LstdFlags)
+			closeLog = func() {}
+		}
+	} else {
+		srvLog = log.New(os.Stdout, loggerPrefix, log.LstdFlags)
+		closeLog = func() {}
+	}
+
+	// Creamos nuestro servidor con su logger
 	srv := &server{
 		db:       db,
-		log:      log.New(os.Stdout, "[srv] ", log.LstdFlags),
+		log:      srvLog,
 		basePath: "data/files", // carpeta para almacenar archivos (opcional)
 	}
 
-	// Al terminar, cerramos la base de datos
-	defer srv.db.Close()
+	// Al terminar, cerramos la base de datos y flusheamos el logger
+	defer func() {
+		closeLog()
+		srv.db.Close()
+	}()
 
 	// Construimos un mux y asociamos /api a nuestro apiHandler,
 	mux := http.NewServeMux()
@@ -224,9 +251,11 @@ func (s *server) registerUser(req api.Request) api.Response {
 
 	// Creamos una entrada vacía para los datos en 'userdata'
 	if err := s.db.Put("userdata", []byte(regReq.Username), []byte("")); err != nil {
+		s.log.Printf("FALLO REGISTRO: error al inicializar datos de usuario '%s'", regReq.Username)
 		return api.Response{Success: false, Message: "Error al inicializar datos de usuario"}
 	}
 
+	s.log.Printf("ÉXITO REGISTRO: usuario '%s' se ha dado de alta", regReq.Username)
 	return api.Response{Success: true, Message: "Usuario registrado"}
 }
 
@@ -255,9 +284,11 @@ func (s *server) loginUser(req api.Request) api.Response {
 	// Generamos un nuevo token, lo guardamos en 'sessions'
 	token := s.generateToken(loginReq.Username)
 	if err := s.db.Put("sessions", []byte(token), []byte(loginReq.Username)); err != nil {
+		s.log.Printf("FALLO LOGIN: error al crear sesión para '%s'", loginReq.Username)
 		return api.Response{Success: false, Message: "Error al crear sesión"}
 	}
 
+	s.log.Printf("ÉXITO LOGIN: usuario '%s' inició sesión", loginReq.Username)
 	return api.Response{Success: true, Message: "Login exitoso", Token: token}
 }
 
@@ -310,16 +341,18 @@ func (s *server) logoutUser(req api.Request, token string) api.Response {
 	if token == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
-	valid, _ := s.isTokenValid(token)
+	valid, username := s.isTokenValid(token)
 	if !valid {
 		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
 	}
 
 	// Borramos la entrada en 'sessions'
 	if err := s.db.Delete("sessions", []byte(token)); err != nil {
+		s.log.Printf("FALLO LOGOUT: error interno para usuario '%s'", username)
 		return api.Response{Success: false, Message: "Error al cerrar sesión"}
 	}
 
+	s.log.Printf("ÉXITO LOGOUT: usuario '%s' cerró sesión", username)
 	return api.Response{Success: true, Message: "Sesión cerrada correctamente"}
 }
 
@@ -560,6 +593,7 @@ func (s *server) streamFetchData(w http.ResponseWriter, req api.Request, token s
 	}
 	defer file.Close()
 
+	s.log.Printf("ÉXITO DESCARGA: usuario '%s' descargó '%s'", username, dbPath)
 	w.Header().Set("Content-Type", "application/octet-stream") // Porque estamos pasando un archivo binario
 	io.Copy(w, file)                                           // Pasamos poco a poco la información del archivo
 }
