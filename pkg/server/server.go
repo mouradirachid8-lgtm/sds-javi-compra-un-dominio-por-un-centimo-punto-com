@@ -33,15 +33,15 @@ const maxUploadSize = 1000 << 20 // 1000 MiB por defecto
 // Run inicia la base de datos y arranca el servidor HTTPS con el certificado TLS proporcionado.
 // certPEM y keyPEM son el certificado y la clave privada en formato PEM,
 // generados por el paquete certgen.
-func Run(certPEM, keyPEM []byte) error {
+func Run(certPEM, keyPEM []byte, basePath string, dbName string, fileName string, port string) error {
 
 	// Crear la carpeta 'data' en caso de que no exista.
-	if err := os.MkdirAll("data", 0755); err != nil {
+	if err := os.MkdirAll(basePath, 0755); err != nil {
 		return fmt.Errorf("error creando la carpeta 'data': %w", err)
 	}
 
 	// Abrimos la base de datos usando el motor bbolt
-	db, err := store.NewStore("bbolt", "data/server.db")
+	db, err := store.NewStore("bbolt", fmt.Sprintf("%s/server.db", basePath))
 	if err != nil {
 		return fmt.Errorf("error abriendo base de datos: %v", err)
 	}
@@ -50,7 +50,7 @@ func Run(certPEM, keyPEM []byte) error {
 	srv := &server{
 		db:       db,
 		log:      log.New(os.Stdout, "[srv] ", log.LstdFlags),
-		basePath: "data/files", // carpeta para almacenar archivos (opcional)
+		basePath: fmt.Sprintf("%s/files", basePath), // carpeta para almacenar archivos (opcional)
 	}
 
 	// Al terminar, cerramos la base de datos
@@ -68,7 +68,7 @@ func Run(certPEM, keyPEM []byte) error {
 
 	// Iniciamos el servidor HTTPS.
 	httpSrv := &http.Server{
-		Addr:    ":8080",
+		Addr:    ":" + port,
 		Handler: mux,
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{tlsCert},
@@ -248,7 +248,7 @@ func (s *server) loginUser(req api.Request) api.Response {
 	}
 
 	// Generamos el nuevo token
-	token, err := s.NewRandomToken()
+	token, err := NewRandomToken()
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al generar el token"}
 	}
@@ -267,7 +267,7 @@ func (s *server) lookup(req api.Request, token string) api.Response {
 	if token == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
-	valid, username := s.isTokenValid(token)
+	valid, username := s.isTokenValid(s.db, token)
 	if !valid {
 		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
 	}
@@ -352,7 +352,7 @@ func (s *server) fetchData(req api.Request, token string) api.Response {
 	if token == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
-	valid, username := s.isTokenValid(token)
+	valid, username := s.isTokenValid(s.db, token)
 	if !valid {
 		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
 	}
@@ -377,7 +377,7 @@ func (s *server) updateData(body io.ReadCloser, token string, path string, force
 	if token == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
-	valid, username := s.isTokenValid(token)
+	valid, username := s.isTokenValid(s.db, token)
 	if !valid {
 		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
 	}
@@ -395,7 +395,7 @@ func (s *server) logoutUser(req api.Request, token string) api.Response {
 	if token == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
-	valid, _ := s.isTokenValid(token)
+	valid, _ := s.isTokenValid(s.db, token)
 	if !valid {
 		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
 	}
@@ -502,7 +502,7 @@ func (s *server) deleteData(req api.Request, token string) api.Response {
 	if token == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
-	valid, username := s.isTokenValid(token)
+	valid, username := s.isTokenValid(s.db, token)
 	if !valid {
 		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
 	}
@@ -581,7 +581,7 @@ func (s *server) streamFetchData(w http.ResponseWriter, req api.Request, token s
 		http.Error(w, "Faltan credenciales", http.StatusUnauthorized)
 		return
 	}
-	valid, username := s.isTokenValid(token)
+	valid, username := s.isTokenValid(s.db, token)
 	if !valid {
 		http.Error(w, "Token inválido o expirado", http.StatusUnauthorized)
 		return

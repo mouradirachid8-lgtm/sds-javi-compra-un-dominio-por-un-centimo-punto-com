@@ -39,7 +39,7 @@ func main() {
 	// Inicia servidor HTTPS en goroutine.
 	logger.Println("Iniciando servidor HTTPS...")
 	go func() {
-		if err := server.Run(certPEM, keyPEM); err != nil {
+		if err := server.Run(certPEM, keyPEM, "data", "server.db", "files", "8080"); err != nil {
 			logger.Fatalf("Error del servidor: %v\n", err)
 		}
 	}()
