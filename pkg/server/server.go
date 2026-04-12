@@ -3,7 +3,6 @@
 package server
 
 import (
-	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -16,7 +15,6 @@ import (
 	"path/filepath"
 	"sprout/pkg/api"
 	"sprout/pkg/store"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -182,18 +180,6 @@ func (s *server) fileHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(res)
 }
 
-// generateToken crea un token único incrementando un contador interno (inseguro)
-func (s *server) generateToken(username string) string {
-	// atomic es necesario al haber paralelismo en las peticiones HTTP.
-	n, err := rand.Int(rand.Reader, INT64_MAX)
-	if err != nil {
-		panic(err)
-	}
-	id := n.Int64()
-	//id := atomic.AddInt64(&s.tokenCounter, 1)
-	return fmt.Sprintf("token_%d+%s", id, username)
-}
-
 // registerUser registra un nuevo usuario, si no existe.
 // - Guardamos la contraseña en el namespace 'auth'
 // - Creamos entrada vacía en 'userdata' para el usuario
@@ -217,8 +203,14 @@ func (s *server) registerUser(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "El usuario ya existe"}
 	}
 
+	// Hasheamos la contraseña
+	hashedPassword, err := HashPassword(regReq.Password)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al generar el hash"}
+	}
+
 	// Almacenamos la contraseña en el namespace 'auth' (clave=nombre, valor=contraseña)
-	if err := s.db.Put("auth", []byte(regReq.Username), []byte(regReq.Password)); err != nil {
+	if err := s.db.Put("auth", []byte(regReq.Username), []byte(hashedPassword)); err != nil {
 		return api.Response{Success: false, Message: "Error al guardar credenciales"}
 	}
 
@@ -248,12 +240,18 @@ func (s *server) loginUser(req api.Request) api.Response {
 	}
 
 	// Comparamos
-	if string(storedPass) != loginReq.Password {
+	password_ok := VerifyPassword(loginReq.Password, string(storedPass))
+	if !password_ok {
 		return api.Response{Success: false, Message: "Credenciales inválidas"}
 	}
 
-	// Generamos un nuevo token, lo guardamos en 'sessions'
-	token := s.generateToken(loginReq.Username)
+	// Generamos el nuevo token
+	token, err := s.NewRandomToken()
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al generar el token"}
+	}
+
+	// Almacenamos el token en el namespace 'sessions'
 	if err := s.db.Put("sessions", []byte(token), []byte(loginReq.Username)); err != nil {
 		return api.Response{Success: false, Message: "Error al crear sesión"}
 	}
@@ -335,30 +333,6 @@ func (s *server) userExists(username string) (bool, error) {
 		return false, err
 	}
 	return true, nil
-}
-
-// isTokenValid comprueba que el token almacenado en 'sessions'
-// coincida con el token proporcionado.
-func (s *server) isTokenValid(token string) (bool, string) {
-	codePart, extractedUsername, ok := strings.Cut(token, "+")
-	if !ok {
-		return false, ""
-	}
-
-	idStr := strings.TrimPrefix(codePart, "token_")
-	_, errParse := strconv.ParseInt(idStr, 10, 64)
-	if errParse != nil {
-		return false, ""
-	}
-	username, err := s.db.Get("sessions", []byte(token))
-	if err != nil {
-		return false, ""
-	}
-	if string(username) == extractedUsername {
-		return true, extractedUsername
-	} else {
-		return false, ""
-	}
 }
 
 func (s *server) saveFile(body io.ReadCloser, username string, force bool, path string) error {
