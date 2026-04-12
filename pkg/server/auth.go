@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 
+	"sprout/pkg/store"
+
 	"golang.org/x/crypto/argon2"
 )
 
@@ -74,7 +76,7 @@ func VerifyPassword(password, encoded string) bool {
 /*
 Genera tokens aleatorios
 */
-func (s *server) NewRandomToken() (string, error) {
+func NewRandomToken() (string, error) {
 	buf := make([]byte, tokenLen)
 	if _, err := rand.Read(buf); err != nil {
 		return "", fmt.Errorf("no se pudo generar un token aleatorio: %w", err)
@@ -87,12 +89,12 @@ func (s *server) NewRandomToken() (string, error) {
 /*
 Comprueba que el token almacenado en 'sessions' coincida con el token proporcionado.
 */
-func (s *server) isTokenValid(token string) (bool, string) {
+func (s *server) isTokenValid(db store.Store, token string) (bool, string) {
 	if token == "" {
 		return false, ""
 	}
 
-	username, err := s.db.Get("sessions", []byte(token))
+	username, err := db.Get("sessions", []byte(token))
 	if err != nil {
 		return false, ""
 	}

@@ -202,6 +202,7 @@ func (c *client) loginUser() {
 
 	fmt.Println("Éxito:", res.Success)
 	fmt.Println("Mensaje:", res.Message)
+	fmt.Println("Token:", res.Token)
 
 	// Si login fue exitoso, guardamos currentUser y el token.
 	if res.Success {
