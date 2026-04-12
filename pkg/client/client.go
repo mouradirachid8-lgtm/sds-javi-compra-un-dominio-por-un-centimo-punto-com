@@ -325,7 +325,7 @@ func (c *client) updateData() {
 		return
 	}
 	if fileStat.IsDir() { // De momento solo se permiten ficheros
-		c.log.Println("La ruta introducida es un directorio, todo el contenido se subirá y remplazara al existente, continuar (S/n)?")
+		fmt.Println("La ruta introducida es un directorio, todo el contenido se subirá y remplazara al existente, continuar (S/n)?")
 		response := ui.ReadInput("")
 		response = strings.ToLower(response)
 		if response != "s" {
@@ -336,10 +336,18 @@ func (c *client) updateData() {
 	destBasePath := ui.ReadInput("Introduce la ruta donde quieres almacenar el fichero en el servidor (ej: /docs/miarchivo.txt)")
 
 	if fileStat.IsDir() {
+		fmt.Println("Subiendo directorio de forma recursiva...")
+		startTime := time.Now()
 		if count, total, err := c.recursiveUpload(filePathVar, destBasePath); err != nil {
+			endTime := time.Now()
+			duration := endTime.Sub(startTime)
+			fmt.Printf("Tiempo transcurrido: %s\n", duration)
 			c.log.Println("Error al subir el directorio:", err)
 			return
 		} else {
+			endTime := time.Now()
+			duration := endTime.Sub(startTime)
+			fmt.Printf("Tiempo transcurrido: %s\n", duration)
 			fmt.Printf("Se han subido %d archivos de un total de %d.\n", count, total)
 		}
 		return
@@ -372,8 +380,6 @@ func (c *client) updateData() {
 
 func (c *client) recursiveUpload(localPath string, destBasePath string) (int, int, error) {
 	// Enviamos la solicitud de actualización
-	fmt.Println("Subiendo archivos: ")
-	//Como detecto el SO?
 	if !strings.HasSuffix(localPath, string(os.PathSeparator)) {
 		localPath += string(os.PathSeparator)
 	}
@@ -394,18 +400,16 @@ func (c *client) recursiveUpload(localPath string, destBasePath string) (int, in
 		if destpath != "" {
 			res, err := c.uploadFile(path, destpath, false)
 			if err != nil {
-				fmt.Println("Error al subir el fichero :", err)
+				c.log.Println("Error al subir el fichero :", err)
 			}
 			if !res.Success {
-				fmt.Println("Error al subir el fichero :", res.Message)
+				c.log.Println("Error al subir el fichero :", res.Message)
 			} else {
-				fmt.Println("Subido archivo  con exito", path, " a ", destpath)
 				count++
 			}
 		}
 		return nil
 	})
-	fmt.Println("Subido directorio completo")
 	return count, total, nil
 }
 

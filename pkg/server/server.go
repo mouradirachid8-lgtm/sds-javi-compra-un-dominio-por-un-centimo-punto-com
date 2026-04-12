@@ -429,12 +429,13 @@ func (s *server) saveFile(body io.ReadCloser, username string, force bool, path 
 		return fmt.Errorf("No se admite '..'")
 	}
 
-	// Si el cliente envía una ruta absoluta (Windows/Linux), nos quedamos con el nombre.
-	if filepath.IsAbs(path) || (len(path) >= 2 && path[1] == ':') {
-		path = filepath.Base(path)
+	// Si el cliente envía una ruta absoluta (Windows/Linux)
+	if filepath.IsAbs(path) {
+		path = strings.TrimPrefix(path, "/")
+	} else if len(path) >= 2 && path[1] == ':' {
+		path = strings.TrimPrefix(path, path[:2])
 	}
 
-	path = strings.TrimPrefix(path, "/")
 	path = "/" + username + "/" + path
 	path = strings.ReplaceAll(path, "//", "/") // Evitamos dobles barras
 	var creationTime int64
@@ -601,8 +602,11 @@ func (s *server) streamFetchData(w http.ResponseWriter, req api.Request, token s
 		return
 	}
 
-	if filepath.IsAbs(path) || (len(path) >= 2 && path[1] == ':') {
-		path = filepath.Base(path)
+	// Si el cliente envía una ruta absoluta (Windows/Linux)
+	if filepath.IsAbs(path) {
+		path = strings.TrimPrefix(path, "/")
+	} else if len(path) >= 2 && path[1] == ':' {
+		path = strings.TrimPrefix(path, path[:2])
 	}
 
 	path = strings.TrimPrefix(path, "/")
