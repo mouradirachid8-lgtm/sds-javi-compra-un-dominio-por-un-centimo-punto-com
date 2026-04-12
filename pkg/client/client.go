@@ -83,9 +83,10 @@ func (c *client) runLoop() {
 				"Salir",
 			}
 		} else {
-			// Usuario activo: Ver datos, Actualizar datos, Logout, Salir
+			// Usuario activo: Listar archivos, Descargar datos, Actualizar datos, Borrar datos, Cerrar sesión, Salir
 			options = []string{
-				"Ver datos",
+				"Listar archivos",
+				"Descargar datos",
 				"Actualizar datos",
 				"Borrar datos",
 				"Cerrar sesión",
@@ -113,14 +114,16 @@ func (c *client) runLoop() {
 			// Caso logueado
 			switch choice {
 			case 1:
-				c.fetchData()
+				c.lookup()
 			case 2:
-				c.updateData()
+				c.fetchData()
 			case 3:
-				c.deleteData()
+				c.updateData()
 			case 4:
-				c.logoutUser()
+				c.deleteData()
 			case 5:
+				c.logoutUser()
+			case 6:
 				// Opción Salir
 				c.log.Println("Saliendo del cliente...")
 				return
@@ -205,6 +208,42 @@ func (c *client) loginUser() {
 		c.currentUser = username
 		c.authToken = res.Token
 		fmt.Println("Sesión iniciada con éxito. Token guardado.")
+	}
+}
+
+// lookup pide un listado de los archivos de un directorio.
+// El servidor devuelve el listado asociado al usuario logueado.
+func (c *client) lookup() {
+	ui.ClearScreen()
+	fmt.Println("** Listar archivos del servidor **")
+
+	if c.currentUser == "" || c.authToken == "" {
+		fmt.Println("No estás logueado. Inicia sesión primero.")
+		return
+	}
+
+	remotePath := ui.ReadInput("Ruta del directorio en el servidor (ej: dir/docs/)")
+	recursive := ui.ReadInput("¿Quieres que se muestren los archivos de forma recursiva? (s/n)")
+
+	body, _ := json.Marshal(api.LookupRequest{Path: remotePath, Recursive: recursive == "s"})
+	res := c.sendRequest(api.Request{Body: body}, nil, api.ActionLookup)
+
+	fmt.Println("Éxito:", res.Success)
+	fmt.Println("Mensaje:", res.Message)
+	if res.Success {
+		var files []api.File
+		if err := json.Unmarshal([]byte(res.Data), &files); err == nil {
+			fmt.Println("Archivos:")
+			for _, f := range files {
+				if f.IsDirectory {
+					fmt.Printf("- %s (directorio)\n", f.Name)
+				} else {
+					fmt.Printf("- %s (%d bytes, modificado: %s)\n", f.Name, f.Size, f.Modified.Format("2006-01-02 15:04:05"))
+				}
+			}
+		} else {
+			fmt.Println("Error al procesar la lista de archivos:", err)
+		}
 	}
 }
 

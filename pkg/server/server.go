@@ -140,6 +140,8 @@ func (s *server) jsonHandler(w http.ResponseWriter, r *http.Request) {
 		res = s.registerUser(req)
 	case api.ActionLogin:
 		res = s.loginUser(req)
+	case api.ActionLookup:
+		res = s.lookup(req, token)
 	case api.ActionFetchData:
 		s.streamFetchData(w, req, token)
 		return
@@ -257,6 +259,91 @@ func (s *server) loginUser(req api.Request) api.Response {
 	}
 
 	return api.Response{Success: true, Message: "Login exitoso", Token: token}
+}
+
+// lookup lista los archivos en un directorio específico del usuario.
+func (s *server) lookup(req api.Request, token string) api.Response {
+	// Chequeo de credenciales
+	if token == "" {
+		return api.Response{Success: false, Message: "Faltan credenciales"}
+	}
+	valid, username := s.isTokenValid(token)
+	if !valid {
+		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+	}
+
+	var lookupReq api.LookupRequest
+	if err := json.Unmarshal(req.Body, &lookupReq); err != nil {
+		return api.Response{Success: false, Message: "Error al procesar la solicitud"}
+	}
+
+	// Saneamiento de la ruta (Seguridad)
+	path := strings.TrimPrefix(strings.ReplaceAll(lookupReq.Path, "\\", "/"), "/")
+	path = strings.TrimSpace(path)
+	if strings.Contains(path, "..") {
+		return api.Response{Success: false, Message: "No se admite '..' en la ruta"}
+	}
+
+	if filepath.IsAbs(path) || (len(path) >= 2 && path[1] == ':') {
+		path = ""
+	}
+
+	prefix := "/" + username + "/"
+	if path != "" {
+		prefix += strings.TrimSuffix(path, "/") + "/"
+	}
+
+	// Listamos las claves que empiecen con el prefijo del directorio del usuario
+	rawKeys, err := s.db.KeysByPrefix("userdata", []byte(prefix))
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al obtener archivos"}
+	}
+
+	files := make([]api.File, 0, len(rawKeys))
+	seenDirs := make(map[string]bool) // Para evitar listar varias veces la misma carpeta
+
+	for _, key := range rawKeys {
+		remaining := strings.TrimPrefix(string(key), prefix)
+
+		// No listar recursivamente
+		if strings.Contains(remaining, "/") && !lookupReq.Recursive {
+			i := strings.Index(remaining, "/")
+			remaining = remaining[:i] + "/" // Añadimos la barra para indicar que es una carpeta
+
+			if seenDirs[remaining] {
+				continue
+			} else {
+				seenDirs[remaining] = true
+				files = append(files, api.File{
+					Name:        remaining,
+					IsDirectory: true,
+				})
+
+				continue
+			}
+		}
+
+		data, err := s.db.Get("userdata", key)
+		if err != nil {
+			continue
+		}
+		var f api.File
+		if json.Unmarshal(data, &f) == nil {
+			f.Name = remaining
+			files = append(files, f)
+		}
+	}
+
+	payload, err := json.Marshal(files)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al procesar la respuesta"}
+	}
+
+	return api.Response{
+		Success: true,
+		Message: "Archivos listados",
+		Data:    string(payload),
+	}
 }
 
 // fetchData verifica el token y retorna el contenido del namespace 'userdata'.
