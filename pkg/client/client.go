@@ -4,6 +4,10 @@ package client
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha512"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -27,6 +31,7 @@ type client struct {
 	authToken   string
 	httpClient  *http.Client
 	server      string
+	encode      []byte
 }
 
 // Run es la única función exportada de este paquete.
@@ -135,6 +140,13 @@ func (c *client) runLoop() {
 	}
 }
 
+// hashPassword es una función auxiliar para hashear contraseñas antes de enviarlas al servidor.
+func (c *client) hashPassword(password string) [64]byte { // En un caso real, se debería usar un algoritmo de hashing fuerte como bcrypt o Argon2.
+	// Aquí usaremos SHA512 por simplicidad, aunque no es recomendado para contraseñas.
+	// Además, en un caso real se debería usar un salt único por usuario.
+	return sha512.Sum512([]byte(password + c.currentUser))
+}
+
 // registerUser pide credenciales y las envía al servidor para un registro.
 // Si el registro es exitoso, se intenta el login automático.
 func (c *client) registerUser() {
@@ -148,9 +160,14 @@ func (c *client) registerUser() {
 		c.log.Println("No se ha podido obtener la contraseña, registro cancelado: ", err)
 		return
 	}
+
+	hashedPassword := c.hashPassword(password)
+	c.encode = hashedPassword[:32]       // Usamos solo los primeros 32 bytes del hash para el cifrado.
+	loginPassword := hashedPassword[32:] // Usamos solo los últimos 32 bytes del hash para la contraseña.
+
 	body, _ := json.Marshal(api.RegisterRequest{
 		Username: username,
-		Password: password,
+		Password: string(loginPassword),
 	})
 	// Enviamos la acción al servidor
 	res := c.sendRequest(api.Request{
@@ -191,9 +208,13 @@ func (c *client) loginUser() {
 		return
 	}
 
+	hashedPassword := c.hashPassword(password)
+	c.encode = hashedPassword[:32]       // Usamos solo los primeros 32 bytes del hash para el cifrado.
+	loginPassword := hashedPassword[32:] // Usamos solo los últimos 32 bytes del hash para la contraseña.
+
 	body, _ := json.Marshal(api.LoginRequest{
 		Username: username,
-		Password: password,
+		Password: string(loginPassword),
 	})
 
 	res := c.sendRequest(api.Request{
@@ -248,6 +269,56 @@ func (c *client) lookup() {
 	}
 }
 
+func encryptFile(reader io.Reader, key []byte) (io.Reader, error) {
+	iv := make([]byte, 16)
+
+	_, err := rand.Read(iv) // crear un iv aleatorio
+	if err != nil {
+		return nil, err
+	}
+
+	// Crear el bloque AES
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Crear CTR
+	ctr := cipher.NewCTR(block, iv)
+
+	var enc cipher.StreamReader // enc es un stream de cifrado que utiliza CTR para cifrar los datos que se leen de reader
+	enc.S = ctr
+	enc.R = reader
+
+	encWithIV := io.MultiReader(strings.NewReader(string(iv)), enc) // readerWithIV es un reader que primero devuelve el iv y luego el contenido del reader original. Esto es necesario para que el servidor pueda leer el iv al inicio del stream y usarlo para descifrar el resto de datos.
+
+	return encWithIV, nil
+}
+
+func decryptFile(reader io.Reader, key []byte) (io.Reader, error) {
+	iv := make([]byte, 16)
+
+	_, err := io.ReadFull(reader, iv) // leer el iv del inicio del fichero de entrada
+	if err != nil {
+		return nil, err
+	}
+
+	// Crear el bloque AES
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Crear CTR
+	ctr := cipher.NewCTR(block, iv)
+
+	var enc cipher.StreamReader // enc es un stream de cifrado que utiliza CTR para descifrar los datos que se leen de reader
+	enc.S = ctr
+	enc.R = reader
+
+	return enc, nil
+}
+
 // fetchData pide datos privados al servidor.
 // El servidor devuelve la data asociada al usuario logueado.
 func (c *client) fetchData() {
@@ -298,8 +369,14 @@ func (c *client) fetchData() {
 	}
 	defer file.Close()
 
+	encBody, err := decryptFile(resp.Body, c.encode) // Envolvemos el archivo con un reader de descifrado para que se guarde descifrado en el disco
+	if err != nil {
+		fmt.Println("Error desencriptando el archivo remoto:", err)
+		return
+	}
+
 	// Vamos almacenando en el archivo creado los datos que vamos recibiendo del servidor
-	_, err = io.Copy(file, resp.Body)
+	_, err = io.Copy(file, encBody)
 	if err != nil {
 		fmt.Println("Error guardando los datos:", err)
 		return
@@ -435,6 +512,8 @@ func (c *client) logoutUser() {
 	if res.Success {
 		c.currentUser = ""
 		c.authToken = ""
+		c.encode = nil
+
 	}
 }
 
@@ -551,10 +630,17 @@ func (c *client) uploadFile(filePath string, destPath string, force bool) (api.R
 	if err != nil {
 		return api.Response{Success: false, Message: "No se ha podido abrir el fichero"}, fmt.Errorf("no se ha podido abrir el fichero: %w", err)
 	}
+
 	defer file.Close()
+
+	encFile, err := encryptFile(file, c.encode)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al cifrar el fichero"}, fmt.Errorf("error al cifrar el fichero: %w", err)
+	}
+
 	headers := []http.Header{{"X-Force": []string{fmt.Sprintf("%v", force)}}}
 
-	res := c.sendStreamingRequest(file, headers, api.ActionUpdateData, destPath)
+	res := c.sendStreamingRequest(encFile, headers, api.ActionUpdateData, destPath)
 	return res, nil
 }
 
