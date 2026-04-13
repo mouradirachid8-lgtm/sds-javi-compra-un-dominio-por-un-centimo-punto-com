@@ -1,15 +1,10 @@
-// El paquete client contiene la lógica de interacción con el usuario
-// así como de comunicación con el servidor.
 package client
 
 import (
 	"bytes"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,113 +14,169 @@ import (
 	"time"
 )
 
-// client estructura interna no exportada que controla
-// el estado de la sesión (usuario, token) y logger.
-type client struct {
-	log         *log.Logger
-	currentUser string
-	authToken   string
-	httpClient  *http.Client
-	server      string
+type TUI struct {
+	client *client.Client
 }
 
-func NewClient(serverAddr string, certPem []byte) *client {
-	// Construimos un pool de CAs que solo contiene el certificado del servidor.
-	// Así el cliente acepta únicamente ese cert y rechaza cualquier otro.
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(certPem) {
-		log.Fatal("No se ha podido cargar el certificado TLS del servidor")
-	}
+// runLoop maneja la lógica del menú principal.
+// Se muestran distintas opciones en función de si hay un usuario con sesión activa
+func (t *TUI) runLoop() {
+	for {
+		ui.ClearScreen()
 
-	tlsConfig := &tls.Config{
-		RootCAs:    pool,
-		MinVersion: tls.VersionTLS12,
-	}
+		// Construimos un título que muestre el usuario activo, si lo hubiera.
+		var title string
+		if t.client.currentUser == "" {
+			title = "Menú"
+		} else {
+			title = fmt.Sprintf("Menú (%s)", t.client.currentUser)
+		}
 
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = tlsConfig
+		// Generamos las opciones dinámicamente, según si hay un login activo.
+		var options []string
+		if t.client.currentUser == "" {
+			// Usuario NO logueado: Registro, Login, Salir
+			options = []string{
+				"Registrar usuario",
+				"Iniciar sesión",
+				"Salir",
+			}
+		} else {
+			// Usuario activo: Listar archivos, Descargar datos, Actualizar datos, Borrar datos, Cerrar sesión, Salir
+			options = []string{
+				"Listar archivos",
+				"Descargar datos",
+				"Actualizar datos",
+				"Borrar datos",
+				"Cerrar sesión",
+				"Salir",
+			}
+		}
 
-	return &client{
-		log: log.New(os.Stdout, "[cli] ", log.LstdFlags),
-		httpClient: &http.Client{
-			Timeout:   5 * time.Second,
-			Transport: transport,
-		},
-		server: serverAddr,
+		// Mostramos el menú y obtenemos la elección del usuario.
+		choice := ui.PrintMenu(title, options)
+
+		// Hay que mapear la opción elegida según si está logueado o no.
+		if t.client.currentUser == "" {
+			// Caso NO logueado
+			switch choice {
+			case 1:
+				t.registerUser()
+			case 2:
+				t.loginUser()
+			case 3:
+				// Opción Salir
+				t.client.log.Println("Saliendo del cliente...")
+				return
+			}
+		} else {
+			// Caso logueado
+			switch choice {
+			case 1:
+				t.lookupUI()
+			case 2:
+				t.fetchData()
+			case 3:
+				t.updateData()
+			case 4:
+				t.deleteData()
+			case 5:
+				t.logoutUser()
+			case 6:
+				// Opción Salir
+				t.client.log.Println("Saliendo del cliente...")
+				return
+			}
+		}
+
+		// Pausa para que el usuario vea resultados.
+		ui.Pause("Pulsa [Enter] para continuar...")
 	}
 }
 
-func (c *client) login(username, password string) error {
-	body, _ := json.Marshal(api.LoginRequest{
-		Username: username,
-		Password: password,
-	})
+// loginUser pide credenciales y realiza un login en el servidor.
+func (t *TUI) loginUser() {
+	ui.ClearScreen()
+	fmt.Println("** Inicio de sesión **")
 
-	res := c.sendRequest(api.Request{
-		Body: body,
-	}, nil, api.ActionLogin)
+	username := ui.ReadInput("Nombre de usuario")
+	password, err := ui.ReadPassword("Contraseña")
 
-	if res.Success {
-		c.currentUser = username
-		c.authToken = res.Token
-		return nil
-	} else {
-		return fmt.Errorf("login fallido: %s", res.Message)
+	if err != nil {
+		t.client.log.Println("No se ha podido obtener la contraseña, registro cancelado: ", err)
+		return
+	}
+
+	err = t.client.login(username, password)
+	if err != nil {
+		t.client.log.Println("Error durante el login:", err)
 	}
 }
 
-func (c *client) register(username, password string) error {
-	body, _ := json.Marshal(api.RegisterRequest{
-		Username: username,
-		Password: password,
-	})
+// registerUser pide credenciales y las envía al servidor para un registro.
+// Si el registro es exitoso, se intenta el login automático.
+func (t *TUI) registerUser() {
+	ui.ClearScreen()
+	fmt.Println("** Registro de usuario **")
 
-	res := c.sendRequest(api.Request{
-		Body: body,
-	}, nil, api.ActionRegister)
+	username := ui.ReadInput("Nombre de usuario")
+	password, err := ui.ReadPassword("Contraseña")
 
-	if res.Success {
-		c.log.Println("Registro exitoso")
-		return nil
-	} else {
-		return fmt.Errorf("registro fallido: %s", res.Message)
+	if err != nil {
+		t.client.log.Println("No se ha podido obtener la contraseña, registro cancelado: ", err)
+		return
+	}
+
+	err = t.client.register(username, password)
+	if err != nil {
+		t.client.log.Println("Error durante el registro:", err)
+		return
+	}
+
+	fmt.Println("Registro exitoso. Intentando iniciar sesión automáticamente...")
+	err = t.client.login(username, password)
+	if err != nil {
+		t.client.log.Println("Error durante el login automático:", err)
 	}
 }
 
 // lookup pide un listado de los archivos de un directorio.
 // El servidor devuelve el listado asociado al usuario logueado.
-func (c *client) lookup(remotePath string, recursive bool) ([]api.File, error) {
+func (t *TUI) lookupUI() {
 	ui.ClearScreen()
 	fmt.Println("** Listar archivos del servidor **")
 
-	if c.currentUser == "" || c.authToken == "" {
-		return nil, fmt.Errorf("no estás logueado")
+	if t.client.currentUser == "" || t.client.authToken == "" {
+		fmt.Println("No estás logueado. Inicia sesión primero.")
+		return
 	}
 
-	body, _ := json.Marshal(api.LookupRequest{Path: remotePath, Recursive: recursive})
-	res := c.sendRequest(api.Request{Body: body}, nil, api.ActionLookup)
+	remotePath := ui.ReadInput("Ruta del directorio en el servidor (ej: dir/docs/)")
+	recursive := ui.ReadInput("¿Quieres que se muestren los archivos de forma recursiva? (s/n)")
 
-	fmt.Println("Éxito:", res.Success)
-	fmt.Println("Mensaje:", res.Message)
-	var files []api.File = nil
-	if res.Success {
-		if err := json.Unmarshal([]byte(res.Data), &files); err == nil {
-			return files, nil
+	files, err := t.client.lookup(remotePath, recursive == "s")
+	if err != nil {
+		fmt.Println("Error al obtener el listado de archivos:", err)
+		return
+	}
+
+	fmt.Println("Archivos:")
+	for _, f := range files {
+		if f.IsDirectory {
+			fmt.Printf("- %s (directorio)\n", f.Name)
 		} else {
-			return nil, fmt.Errorf("Error al decodificar la lista de archivos: %w", err)
+			fmt.Printf("- %s (%d bytes, modificado: %s)\n", f.Name, f.Size, f.Modified.Format("2006-01-02 15:04:05"))
 		}
-	} else {
-		return nil, fmt.Errorf("Error del servidor: %s", res.Message)
 	}
 }
 
 // fetchData pide datos privados al servidor.
 // El servidor devuelve la data asociada al usuario logueado.
-func (c *client) fetchData() {
+func (t *TUI) fetchDataUI() {
 	ui.ClearScreen()
 	fmt.Println("** Descargar archivo del servidor **")
 
-	if c.currentUser == "" || c.authToken == "" {
+	if t.client.currentUser == "" || t.client.authToken == "" {
 		fmt.Println("No estás logueado. Inicia sesión primero.")
 		return
 	}
@@ -133,50 +184,10 @@ func (c *client) fetchData() {
 	remotePath := ui.ReadInput("Ruta del archivo en el servidor (ej: archivo.txt)")
 	localPath := ui.ReadInput("Dónde guardarlo en tu PC (ej: ./descargado.txt)")
 
-	// Preparamos el JSON pidiendo el archivo que queremos descargar
-	reqBody, _ := json.Marshal(api.FetchDataRequest{Path: remotePath})
-	req := api.Request{Body: reqBody}
-	jsonData, _ := json.Marshal(req)
-
-	// Conectamos la tubería hacia el servidor
-	httpReq, err := http.NewRequest(http.MethodPost, c.server, bytes.NewBuffer(jsonData))
+	err := t.client.fetchData(remotePath, localPath)
 	if err != nil {
-		fmt.Println("Error creando la petición:", err)
-		return
+		fmt.Println("Error al descargar el archivo:", err)
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Action", api.ActionFetchData)
-	httpReq.Header.Set("X-Token", c.authToken)
-
-	// Enviamos la petición
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		fmt.Println("Error conectando con el servidor:", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		fmt.Printf("Error del servidor (Código %d). Puede que el archivo no exista.\n", resp.StatusCode)
-		return
-	}
-
-	// Creamos un archivo en el disco duro del cliente para ir recibiendo la información
-	file, err := os.Create(localPath)
-	if err != nil {
-		fmt.Println("Error creando el archivo local:", err)
-		return
-	}
-	defer file.Close()
-
-	// Vamos almacenando en el archivo creado los datos que vamos recibiendo del servidor
-	_, err = io.Copy(file, resp.Body)
-	if err != nil {
-		fmt.Println("Error guardando los datos:", err)
-		return
-	}
-
-	fmt.Println("Archivo descargado correctamente y guardado en:", localPath)
 }
 
 // updateData pide nuevo texto y lo envía al servidor con ActionUpdateData.
