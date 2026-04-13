@@ -1,40 +1,36 @@
 package client
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
-	"path/filepath"
-	"sprout/pkg/api"
 	"sprout/pkg/ui"
 	"strings"
 	"time"
 )
 
-type TUI struct {
-	client *client.Client
+type tui struct {
+	Client *client
 }
 
-// runLoop maneja la lógica del menú principal.
+// RunTUI maneja la lógica del menú principal.
 // Se muestran distintas opciones en función de si hay un usuario con sesión activa
-func (t *TUI) runLoop() {
+func RunTUI(client *client) {
+	t := &tui{Client: client}
+
 	for {
 		ui.ClearScreen()
 
 		// Construimos un título que muestre el usuario activo, si lo hubiera.
 		var title string
-		if t.client.currentUser == "" {
+		if t.Client.currentUser == "" {
 			title = "Menú"
 		} else {
-			title = fmt.Sprintf("Menú (%s)", t.client.currentUser)
+			title = fmt.Sprintf("Menú (%s)", t.Client.currentUser)
 		}
 
 		// Generamos las opciones dinámicamente, según si hay un login activo.
 		var options []string
-		if t.client.currentUser == "" {
+		if t.Client.currentUser == "" {
 			// Usuario NO logueado: Registro, Login, Salir
 			options = []string{
 				"Registrar usuario",
@@ -57,7 +53,7 @@ func (t *TUI) runLoop() {
 		choice := ui.PrintMenu(title, options)
 
 		// Hay que mapear la opción elegida según si está logueado o no.
-		if t.client.currentUser == "" {
+		if t.Client.currentUser == "" {
 			// Caso NO logueado
 			switch choice {
 			case 1:
@@ -66,7 +62,7 @@ func (t *TUI) runLoop() {
 				t.loginUser()
 			case 3:
 				// Opción Salir
-				t.client.log.Println("Saliendo del cliente...")
+				t.Client.log.Println("Saliendo del cliente...")
 				return
 			}
 		} else {
@@ -75,16 +71,16 @@ func (t *TUI) runLoop() {
 			case 1:
 				t.lookupUI()
 			case 2:
-				t.fetchData()
+				t.fetchDataUI()
 			case 3:
-				t.updateData()
+				t.updateDataUI()
 			case 4:
-				t.deleteData()
+				t.deleteDataUI()
 			case 5:
-				t.logoutUser()
+				t.logoutUserUI()
 			case 6:
 				// Opción Salir
-				t.client.log.Println("Saliendo del cliente...")
+				t.Client.log.Println("Saliendo del cliente...")
 				return
 			}
 		}
@@ -95,7 +91,7 @@ func (t *TUI) runLoop() {
 }
 
 // loginUser pide credenciales y realiza un login en el servidor.
-func (t *TUI) loginUser() {
+func (t *tui) loginUser() {
 	ui.ClearScreen()
 	fmt.Println("** Inicio de sesión **")
 
@@ -103,19 +99,19 @@ func (t *TUI) loginUser() {
 	password, err := ui.ReadPassword("Contraseña")
 
 	if err != nil {
-		t.client.log.Println("No se ha podido obtener la contraseña, registro cancelado: ", err)
+		t.Client.log.Println("No se ha podido obtener la contraseña, registro cancelado: ", err)
 		return
 	}
 
-	err = t.client.login(username, password)
+	err = t.Client.Login(username, password)
 	if err != nil {
-		t.client.log.Println("Error durante el login:", err)
+		t.Client.log.Println("Error durante el login:", err)
 	}
 }
 
 // registerUser pide credenciales y las envía al servidor para un registro.
 // Si el registro es exitoso, se intenta el login automático.
-func (t *TUI) registerUser() {
+func (t *tui) registerUser() {
 	ui.ClearScreen()
 	fmt.Println("** Registro de usuario **")
 
@@ -123,30 +119,30 @@ func (t *TUI) registerUser() {
 	password, err := ui.ReadPassword("Contraseña")
 
 	if err != nil {
-		t.client.log.Println("No se ha podido obtener la contraseña, registro cancelado: ", err)
+		t.Client.log.Println("No se ha podido obtener la contraseña, registro cancelado: ", err)
 		return
 	}
 
-	err = t.client.register(username, password)
+	err = t.Client.Register(username, password)
 	if err != nil {
-		t.client.log.Println("Error durante el registro:", err)
+		t.Client.log.Println("Error durante el registro:", err)
 		return
 	}
 
 	fmt.Println("Registro exitoso. Intentando iniciar sesión automáticamente...")
-	err = t.client.login(username, password)
+	err = t.Client.Login(username, password)
 	if err != nil {
-		t.client.log.Println("Error durante el login automático:", err)
+		t.Client.log.Println("Error durante el login automático:", err)
 	}
 }
 
 // lookup pide un listado de los archivos de un directorio.
 // El servidor devuelve el listado asociado al usuario logueado.
-func (t *TUI) lookupUI() {
+func (t *tui) lookupUI() {
 	ui.ClearScreen()
 	fmt.Println("** Listar archivos del servidor **")
 
-	if t.client.currentUser == "" || t.client.authToken == "" {
+	if t.Client.currentUser == "" || t.Client.authToken == "" {
 		fmt.Println("No estás logueado. Inicia sesión primero.")
 		return
 	}
@@ -154,7 +150,7 @@ func (t *TUI) lookupUI() {
 	remotePath := ui.ReadInput("Ruta del directorio en el servidor (ej: dir/docs/)")
 	recursive := ui.ReadInput("¿Quieres que se muestren los archivos de forma recursiva? (s/n)")
 
-	files, err := t.client.lookup(remotePath, recursive == "s")
+	files, err := t.Client.Lookup(remotePath, recursive == "s")
 	if err != nil {
 		fmt.Println("Error al obtener el listado de archivos:", err)
 		return
@@ -172,11 +168,11 @@ func (t *TUI) lookupUI() {
 
 // fetchData pide datos privados al servidor.
 // El servidor devuelve la data asociada al usuario logueado.
-func (t *TUI) fetchDataUI() {
+func (t *tui) fetchDataUI() {
 	ui.ClearScreen()
 	fmt.Println("** Descargar archivo del servidor **")
 
-	if t.client.currentUser == "" || t.client.authToken == "" {
+	if t.Client.currentUser == "" || t.Client.authToken == "" {
 		fmt.Println("No estás logueado. Inicia sesión primero.")
 		return
 	}
@@ -184,29 +180,33 @@ func (t *TUI) fetchDataUI() {
 	remotePath := ui.ReadInput("Ruta del archivo en el servidor (ej: archivo.txt)")
 	localPath := ui.ReadInput("Dónde guardarlo en tu PC (ej: ./descargado.txt)")
 
-	err := t.client.fetchData(remotePath, localPath)
+	err := t.Client.FetchData(remotePath, localPath)
 	if err != nil {
 		fmt.Println("Error al descargar el archivo:", err)
+	} else {
+		fmt.Println("Archivo descargado correctamente y guardado en:", localPath)
 	}
 }
 
 // updateData pide nuevo texto y lo envía al servidor con ActionUpdateData.
-func (c *client) updateData() {
+func (t *tui) updateDataUI() {
 	ui.ClearScreen()
 	fmt.Println("** Actualizar datos del usuario **")
 
-	if c.currentUser == "" || c.authToken == "" {
+	if t.Client.currentUser == "" || t.Client.authToken == "" {
 		fmt.Println("No estás logueado. Inicia sesión primero.")
 		return
 	}
 
 	// Leemos la nueva Data
 	filePathVar := ui.ReadInput("Introduce el fichero que desees almacenar")
+
 	fileStat, err := os.Stat(filePathVar)
 	if err != nil {
-		c.log.Println("No se ha podido acceder al fichero:", err)
+		t.Client.log.Println("No se ha podido acceder al fichero:", err)
 		return
 	}
+	recursive := false
 	if fileStat.IsDir() { // De momento solo se permiten ficheros
 		fmt.Println("La ruta introducida es un directorio, todo el contenido se subirá y remplazara al existente, continuar (S/n)?")
 		response := ui.ReadInput("")
@@ -214,251 +214,76 @@ func (c *client) updateData() {
 		if response != "s" {
 			return
 		}
+		recursive = true
 	}
 
 	destBasePath := ui.ReadInput("Introduce la ruta donde quieres almacenar el fichero en el servidor (ej: /docs/miarchivo.txt)")
 
-	if fileStat.IsDir() {
-		fmt.Println("Subiendo directorio de forma recursiva...")
-		startTime := time.Now()
-		if count, total, err := c.recursiveUpload(filePathVar, destBasePath); err != nil {
-			endTime := time.Now()
-			duration := endTime.Sub(startTime)
-			fmt.Printf("Tiempo transcurrido: %s\n", duration)
-			c.log.Println("Error al subir el directorio:", err)
-			return
-		} else {
-			endTime := time.Now()
-			duration := endTime.Sub(startTime)
-			fmt.Printf("Tiempo transcurrido: %s\n", duration)
-			fmt.Printf("Se han subido %d archivos de un total de %d.\n", count, total)
-		}
-		return
-	}
-
-	res, err := c.uploadFile(filePathVar, destBasePath, false)
+	startTime := time.Now()
+	count, total, err := t.Client.UploadData(filePathVar, destBasePath, recursive, false)
 	if err != nil {
-		c.log.Println("Error al subir el fichero", filePathVar, " :", err)
-		return
-	}
-
-	fmt.Println("Éxito:", res.Success)
-	fmt.Println("Mensaje:", res.Message)
-	if !res.Success {
-		if strings.Contains(res.Message, "archivo ya existe") {
+		endTime := time.Now()
+		duration := endTime.Sub(startTime)
+		fmt.Printf("Tiempo transcurrido: %s\n", duration)
+		t.Client.log.Println("Error al subir el fichero:", err)
+		//Si ya existe el archivo, preguntamos si se quiere actualizar
+		if strings.Contains(err.Error(), "archivo ya existe") {
 			response := ui.ReadInput("Desea actualizar el archivo (S/n)")
 			response = strings.ToLower(response)
 			if response == "s" {
-				res, err = c.uploadFile(filePathVar, destBasePath, true)
+				count, total, err = t.Client.UploadData(filePathVar, destBasePath, recursive, true)
 				if err != nil {
-					c.log.Println("Error al subir el fichero", filePathVar, " :", err)
+					t.Client.log.Println("Error al subir el fichero", filePathVar, " :", err)
 					return
 				}
-				fmt.Println("Éxito:", res.Success)
-				fmt.Println("Mensaje:", res.Message)
-			}
-		}
-	}
-}
-
-func (c *client) recursiveUpload(localPath string, destBasePath string) (int, int, error) {
-	// Enviamos la solicitud de actualización
-	if !strings.HasSuffix(localPath, string(os.PathSeparator)) {
-		localPath += string(os.PathSeparator)
-	}
-	count := 0
-	total := 0
-	fmt.Println("localPath: ", localPath)
-	//Imprimimos un mensaje con todo el contenido del directorio
-	filepath.Walk(localPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil //No se sube el directorio no es necesario
-		}
-		destpath := destBasePath + strings.TrimPrefix(path, localPath)
-		fmt.Println(path, " - ", info.Size(), " bytes a ", destpath)
-		total++
-		if destpath != "" {
-			res, err := c.uploadFile(path, destpath, false)
-			if err != nil {
-				c.log.Println("Error al subir el fichero :", err)
-			}
-			if !res.Success {
-				c.log.Println("Error al subir el fichero :", res.Message)
 			} else {
-				count++
+				fmt.Println("Subida cancelada por el usuario.")
+				return
 			}
 		}
-		return nil
-	})
-	return count, total, nil
+	}
+	endTime := time.Now()
+	duration := endTime.Sub(startTime)
+	fmt.Printf("Tiempo transcurrido: %s\n", duration)
+	fmt.Printf("Se han subido %d archivos de un total de %d.\n", count, total)
 }
 
 // logoutUser llama a la acción logout en el servidor, y si es exitosa,
 // borra la sesión local (currentUser/authToken).
-func (c *client) logoutUser() {
+func (t *tui) logoutUserUI() {
 	ui.ClearScreen()
 	fmt.Println("** Cerrar sesión **")
 
-	if c.currentUser == "" || c.authToken == "" {
+	if t.Client.currentUser == "" || t.Client.authToken == "" {
 		fmt.Println("No estás logueado.")
 		return
 	}
 
 	// Llamamos al servidor con la acción ActionLogout
-	res := c.sendRequest(api.Request{}, nil, api.ActionLogout)
-
-	fmt.Println("Éxito:", res.Success)
-	fmt.Println("Mensaje:", res.Message)
-
-	// Si fue exitoso, limpiamos la sesión local.
-	if res.Success {
-		c.currentUser = ""
-		c.authToken = ""
-	}
-}
-
-// sendStreamingRequest es una función especializada para enviar datos binarios (ficheros) al servidor.
-func (c *client) sendStreamingRequest(file io.Reader, headers []http.Header, action string, path string) api.Response {
-	valid := api.IsValidAction(action)
-	if !valid {
-		c.log.Println("Acción no válida:", action)
-		return api.Response{Success: false, Message: "Acción no válida"}
-	}
-	httpReq, err := http.NewRequest(http.MethodPost, c.server, file)
+	err := t.Client.logoutUser()
 	if err != nil {
-		c.log.Println("No se ha podido construir la petición HTTP:", err)
-		return api.Response{Success: false, Message: "Error interno del cliente"}
+		fmt.Println("Error al cerrar sesión:", err)
+		return
 	}
-	httpReq.Header.Set("Content-Type", "application/octet-stream")
-	httpReq.Header.Set("X-Action", action)
-	if c.authToken != "" {
-		httpReq.Header.Set("X-Token", c.authToken)
-	}
-	httpReq.Header.Set("X-Path", path)
-
-	for _, h := range headers {
-		for k, v := range h {
-			for _, vv := range v {
-				httpReq.Header.Set(k, vv)
-			}
-		}
-	}
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		fmt.Println("Error al contactar con el servidor:", err)
-		return api.Response{Success: false, Message: "Error de conexión"}
-	}
-	defer resp.Body.Close()
-
-	// Leemos el body de respuesta y lo desempaquetamos en un api.Response.
-	// Si el servidor ha respondido con un error HTTP, intentamos igualmente
-	// descodificar un api.Response para mostrar el mensaje.
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		c.log.Println("No se ha podido leer la respuesta:", err)
-		return api.Response{Success: false, Message: "Respuesta inválida del servidor"}
-	}
-	var res api.Response
-	if err := json.Unmarshal(body, &res); err != nil {
-		c.log.Println("No se ha podido descodificar la respuesta JSON:", err)
-		return api.Response{Success: false, Message: "Respuesta inválida del servidor"}
-	}
-	return res
 
 }
 
-// sendRequest envía un POST JSON a la URL del servidor y
-// devuelve la respuesta decodificada. Se usa para todas las acciones.
-func (c *client) sendRequest(req api.Request, headers []http.Header, action string) api.Response {
-	valid := api.IsValidAction(action)
-	if !valid {
-		c.log.Println("Acción no válida:", action)
-		return api.Response{Success: false, Message: "Acción no válida"}
-	}
-
-	jsonData, err := json.Marshal(req)
-	if err != nil {
-		c.log.Println("No se ha podido serializar la petición JSON:", err)
-		return api.Response{Success: false, Message: "Error interno del cliente"}
-	}
-
-	httpReq, err := http.NewRequest(http.MethodPost, c.server, bytes.NewBuffer(jsonData))
-	if err != nil {
-		c.log.Println("No se ha podido construir la petición HTTP:", err)
-		return api.Response{Success: false, Message: "Error interno del cliente"}
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Action", action)
-	if c.authToken != "" {
-		httpReq.Header.Set("X-Token", c.authToken)
-	}
-
-	for _, h := range headers {
-		for k, v := range h {
-			for _, vv := range v {
-				httpReq.Header.Set(k, vv)
-			}
-		}
-	}
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		fmt.Println("Error al contactar con el servidor:", err)
-		return api.Response{Success: false, Message: "Error de conexión"}
-	}
-	defer resp.Body.Close()
-
-	// Leemos el body de respuesta y lo desempaquetamos en un api.Response.
-	// Si el servidor ha respondido con un error HTTP, intentamos igualmente
-	// descodificar un api.Response para mostrar el mensaje.
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		c.log.Println("No se ha podido leer la respuesta:", err)
-		return api.Response{Success: false, Message: "Respuesta inválida del servidor"}
-	}
-	var res api.Response
-	if err := json.Unmarshal(body, &res); err != nil {
-		c.log.Println("No se ha podido descodificar la respuesta JSON:", err)
-		return api.Response{Success: false, Message: "Respuesta inválida del servidor"}
-	}
-	return res
-}
-
-func (c *client) uploadFile(filePath string, destPath string, force bool) (api.Response, error) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return api.Response{Success: false, Message: "No se ha podido abrir el fichero"}, fmt.Errorf("no se ha podido abrir el fichero: %w", err)
-	}
-	defer file.Close()
-	headers := []http.Header{{"X-Force": []string{fmt.Sprintf("%v", force)}}}
-
-	res := c.sendStreamingRequest(file, headers, api.ActionUpdateData, destPath)
-	return res, nil
-}
-
-func (c *client) deleteData() {
+func (t *tui) deleteDataUI() {
 	ui.ClearScreen()
 	fmt.Println("** Borrar datos del usuario **")
 
-	if c.currentUser == "" || c.authToken == "" {
+	if t.Client.currentUser == "" || t.Client.authToken == "" {
 		fmt.Println("No estás logueado. Inicia sesión primero.")
 		return
 	}
 
 	targetPath := ui.ReadInput("Introduce la ruta del fichero o carpeta que quieres borrar (ej: /docs/miarchivo.txt o /docs)")
 
-	body, _ := json.Marshal(api.DeleteDataRequest{
-		Path: targetPath,
-	})
+	err := t.Client.DeleteData(targetPath)
+	if err != nil {
+		fmt.Println("Error al borrar los datos:", err)
+		return
+	}
 
-	res := c.sendRequest(api.Request{
-		Body: body,
-	}, nil, api.ActionDeleteData)
-
-	fmt.Println("Éxito:", res.Success)
-	fmt.Println("Mensaje:", res.Message)
+	fmt.Println("Datos borrados correctamente.")
 }

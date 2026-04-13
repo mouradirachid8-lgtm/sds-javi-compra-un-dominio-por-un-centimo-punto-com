@@ -2,10 +2,10 @@
  - [x] Arquitectura cliente/servidor, realizándose ambos en Go a partir del código proporcionado.  
  - [x]  Mecanismo de autentificación seguro (gestión de contraseñas, identidades y sesión). 
  - [x]  Transporte de red seguro entre cliente y servidor (HTTPS). 
- - [ ]  Almacenamiento seguro (cifrado en descanso) en el servidor. 
+ - [x]  Almacenamiento seguro (cifrado en descanso) en el servidor. //Se realizado por parte del cliente, deberiamos ver de que el servidor lo haga por su cuenta?
  - [x]  Gestión de los ficheros y carpetas (creación, borrado, etc.)
 # Opcionales
- - [ ]  Cifrado punto a punto (el servidor no conoce las claves ni la información, todo el 
+ - [x]  Cifrado punto a punto (el servidor no conoce las claves ni la información, todo el 
 cifrado/descifrado se realiza en el cliente de forma local). 
  - [ ]  Gestión de metadatos de los ficheros (permisos, fechas, diferentes plataformas, etc.) 
  - [ ]  Gestión de categorías, tags o filtrado de ficheros (si implica seguridad adicional). 
