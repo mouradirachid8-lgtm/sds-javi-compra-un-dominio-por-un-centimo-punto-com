@@ -241,6 +241,11 @@ func (t *tui) updateDataUI() {
 				fmt.Println("Subida cancelada por el usuario.")
 				return
 			}
+		} else {
+			endTime := time.Now()
+			duration := endTime.Sub(startTime)
+			fmt.Printf("Tiempo transcurrido: %s\n", duration)
+			return
 		}
 	}
 	endTime := time.Now()

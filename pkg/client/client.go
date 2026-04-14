@@ -36,6 +36,13 @@ type client struct {
 func NewClient(serverAddr string, certPem []byte) *client {
 	// Aseguramos que la URL del servidor apunta al endpoint /api que maneja
 	// las peticiones JSON/stream en el servidor. Evitamos duplicar barras.
+	//Ponemos https, quitamos la barra final y añadimos /api si no está presente.
+	if !strings.HasPrefix(serverAddr, "http://") && !strings.HasPrefix(serverAddr, "https://") {
+		serverAddr = "https://" + serverAddr
+	}
+	if strings.HasSuffix(serverAddr, "/") {
+		serverAddr = strings.TrimRight(serverAddr, "/")
+	}
 	if !strings.HasSuffix(serverAddr, "/api") {
 		serverAddr = strings.TrimRight(serverAddr, "/") + "/api"
 	}
@@ -290,6 +297,7 @@ func (c *client) recursiveUpload(localPath string, destBasePath string) (int, in
 	//Imprimimos un mensaje con todo el contenido del directorio
 	filepath.Walk(localPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			c.log.Println("Error al acceder al fichero:", err)
 			return err
 		}
 		if info.IsDir() {
@@ -329,9 +337,10 @@ func (c *client) logoutUser() error {
 		c.currentUser = ""
 		c.authToken = ""
 		c.encode = nil
-
+		return nil
+	} else {
+		return fmt.Errorf("error del servidor: %s", res.Message)
 	}
-	return nil
 }
 
 // sendStreamingRequest es una función especializada para enviar datos binarios (ficheros) al servidor.
