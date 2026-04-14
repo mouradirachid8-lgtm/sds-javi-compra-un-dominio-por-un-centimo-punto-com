@@ -99,7 +99,7 @@ func (t *tui) loginUser() {
 	password, err := ui.ReadPassword("Contraseña")
 
 	if err != nil {
-		t.Client.log.Println("No se ha podido obtener la contraseña, registro cancelado: ", err)
+		t.Client.log.Println("No se ha podido obtener la contraseña, inicio de sesión cancelado: ", err)
 		return
 	}
 
@@ -149,8 +149,9 @@ func (t *tui) lookupUI() {
 
 	remotePath := ui.ReadInput("Ruta del directorio en el servidor (ej: dir/docs/)")
 	recursive := ui.ReadInput("¿Quieres que se muestren los archivos de forma recursiva? (s/n)")
+	isRecursive := strings.ToLower(strings.TrimSpace(recursive)) == "s"
 
-	files, err := t.Client.Lookup(remotePath, recursive == "s")
+	files, err := t.Client.Lookup(remotePath, isRecursive)
 	if err != nil {
 		fmt.Println("Error al obtener el listado de archivos:", err)
 		return
@@ -208,7 +209,7 @@ func (t *tui) updateDataUI() {
 	}
 	recursive := false
 	if fileStat.IsDir() { // De momento solo se permiten ficheros
-		fmt.Println("La ruta introducida es un directorio, todo el contenido se subirá y remplazara al existente, continuar (S/n)?")
+		fmt.Println("La ruta introducida es un directorio, todo el contenido se subirá y reemplazará al existente, continuar (S/n)?")
 		response := ui.ReadInput("")
 		response = strings.ToLower(response)
 		if response != "s" {
