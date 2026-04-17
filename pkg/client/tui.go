@@ -162,7 +162,7 @@ func (t *tui) lookupUI() {
 		if f.IsDirectory {
 			fmt.Printf("- %s (directorio)\n", f.Name)
 		} else {
-			fmt.Printf("- %s (%d bytes, modificado: %s)\n", f.Name, f.Size, f.Modified.Format("2006-01-02 15:04:05"))
+			fmt.Printf("- %s (%d bytes, modificado: %s, permisos: %s)\n", f.Name, f.Size, f.Modified.Format("2006-01-02 15:04:05"), f.Permissions)
 		}
 	}
 }
