@@ -53,5 +53,7 @@ func main() {
 
 	// Inicia cliente con el cert del servidor para cert pinning.
 	logger.Println("Iniciando cliente...")
-	client.Run(certPEM)
+	cliente := client.NewClient("https://localhost:8080/api", certPEM)
+	logger.Println("Cliente iniciado correctamente.")
+	client.RunTUI(cliente)
 }
