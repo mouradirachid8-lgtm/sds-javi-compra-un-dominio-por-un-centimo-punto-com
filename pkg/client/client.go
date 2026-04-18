@@ -329,7 +329,7 @@ func (c *client) recursiveUpload(localPath string, destBasePath string) (int, in
 
 // logoutUser llama a la acción logout en el servidor, y si es exitosa,
 // borra la sesión local (currentUser/authToken).
-func (c *client) logoutUser() error {
+func (c *client) LogoutUser() error {
 
 	if c.currentUser == "" || c.authToken == "" {
 		return fmt.Errorf("no estás logueado")

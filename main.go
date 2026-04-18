@@ -11,6 +11,8 @@ estudiantes: 	**entregar**
 package main
 
 import (
+	"flag"
+	"fmt"
 	"log"
 	"os"
 	"time"
@@ -18,10 +20,21 @@ import (
 	"sprout/pkg/certgen"
 	"sprout/pkg/client"
 	"sprout/pkg/server"
+	"sprout/pkg/store"
 	"sprout/pkg/ui"
 )
 
 func main() {
+	//Obtenemos parametros de entrada
+	var basePath, dbName, fileName, port string
+	var dump bool
+	flag.StringVar(&basePath, "base", "data", "Ruta base para la base de datos y archivos (default: data)")
+	flag.StringVar(&dbName, "db", "server.db", "Nombre de la base de datos (default: server.db)")
+	flag.StringVar(&fileName, "files", "files", "Nombre del directorio donde se almacenarán los archivos (default: files)")
+	flag.StringVar(&port, "port", "8080", "Puerto en el que el servidor escuchará (default: 8080)")
+	flag.BoolVar(&dump, "dump", false, "Si se establece, se hará un volcado de la base de datos al entrar, debe existir (default: false)")
+
+	flag.Parse()
 
 	// Creamos un logger con prefijo 'main' para identificar
 	// los mensajes en la consola.
@@ -36,10 +49,27 @@ func main() {
 	}
 	logger.Println("Certificado TLS generado correctamente.")
 
+	if dump {
+		// Abrimos la base de datos usando el motor bbolt
+		logger.Println("Abriendo base de datos para volcado...")
+		db, err := store.NewStore("bbolt", fmt.Sprintf("%s/server.db", basePath))
+		if err != nil {
+			logger.Fatalf("error abriendo base de datos: %v", err)
+		}
+		logger.Println("Base de datos abierta correctamente, realizando volcado...")
+		err = db.Dump()
+		if err != nil {
+			logger.Fatalf("error dump database: %v", err)
+		}
+		time.Sleep(1000 * time.Millisecond)
+		db.Close()
+		logger.Println("Volcado de base de datos completado.")
+	}
+
 	// Inicia servidor HTTPS en goroutine.
 	logger.Println("Iniciando servidor HTTPS...")
 	go func() {
-		if err := server.Run(certPEM, keyPEM, "data", "server.db", "files", "8080"); err != nil {
+		if err := server.Run(certPEM, keyPEM, basePath, dbName, fileName, port); err != nil {
 			logger.Fatalf("Error del servidor: %v\n", err)
 		}
 	}()

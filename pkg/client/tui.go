@@ -266,7 +266,7 @@ func (t *tui) logoutUserUI() {
 	}
 
 	// Llamamos al servidor con la acción ActionLogout
-	err := t.Client.logoutUser()
+	err := t.Client.LogoutUser()
 	if err != nil {
 		fmt.Println("Error al cerrar sesión:", err)
 		return
