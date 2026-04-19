@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sprout/pkg/api"
 	"sprout/pkg/store"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -173,7 +174,14 @@ func (s *server) fileHandler(w http.ResponseWriter, r *http.Request) {
 	var res api.Response
 	switch action {
 	case api.ActionUpdateData:
-		res = s.updateData(r.Body, token, r.Header.Get("X-Path"), r.Header.Get("X-Force") == "true")
+		res = s.updateData(
+			r.Body,
+			token,
+			r.Header.Get("X-Path"),
+			r.Header.Get("X-Force") == "true",
+			r.Header.Get("X-Permissions"),
+			r.Header.Get("X-Modified"),
+		)
 	default:
 		res = api.Response{Success: false, Message: "Acción desconocida"}
 	}
@@ -372,7 +380,7 @@ func (s *server) fetchData(req api.Request, token string) api.Response {
 
 // updateData cambia el contenido de 'userdata' (los "datos" del usuario)
 // después de validar el token.
-func (s *server) updateData(body io.ReadCloser, token string, path string, force bool) api.Response {
+func (s *server) updateData(body io.ReadCloser, token string, path string, force bool, perms string, modTime string) api.Response {
 	// Chequeo de credenciales
 	if token == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
@@ -382,7 +390,7 @@ func (s *server) updateData(body io.ReadCloser, token string, path string, force
 		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
 	}
 
-	if err := s.saveFile(body, username, force, path); err != nil {
+	if err := s.saveFile(body, username, force, path, perms, modTime); err != nil {
 		return api.Response{Success: false, Message: "Error al guardar datos: " + err.Error()}
 	}
 
@@ -422,7 +430,7 @@ func (s *server) userExists(username string) (bool, error) {
 	return true, nil
 }
 
-func (s *server) saveFile(body io.ReadCloser, username string, force bool, path string) error {
+func (s *server) saveFile(body io.ReadCloser, username string, force bool, path string, perms string, modTime string) error {
 	path = strings.ReplaceAll(path, "\\", "/") // Evitamos barras invertidas
 	path = strings.TrimSpace(path)
 	if strings.Contains(path, "..") {
@@ -476,13 +484,29 @@ func (s *server) saveFile(body io.ReadCloser, username string, force bool, path 
 		os.Remove(s.basePath + path)
 		return fmt.Errorf("error al obtener información del archivo: %w", err)
 	}
+
+	finalModTime := time.Now()
+	if t, errParse := time.Parse(time.RFC3339, modTime); errParse == nil {
+		finalModTime = t
+	}
+
+	if perms == "" {
+		perms = "0644"
+	}
+
+	// Aplicamos los permisos
+	if p, errParse := strconv.ParseUint(perms, 8, 32); errParse == nil {
+		file.Chmod(os.FileMode(p))
+	}
+
 	fileBytes, err := json.Marshal(api.File{
 		Name:        filepath.Base(path),
-		Modified:    time.Now(),
+		Modified:    finalModTime,
 		Created:     time.Unix(creationTime, 0),
 		Size:        stats.Size(),
 		Path:        path,
 		IsDirectory: false,
+		Permissions: perms,
 	})
 	if err != nil {
 		os.Remove(s.basePath + path)

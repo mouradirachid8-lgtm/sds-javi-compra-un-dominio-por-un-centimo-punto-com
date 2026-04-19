@@ -133,16 +133,22 @@ func (c *client) Lookup(remotePath string, recursive bool) ([]api.File, error) {
 	body, _ := json.Marshal(api.LookupRequest{Path: remotePath, Recursive: recursive})
 	res := c.sendRequest(api.Request{Body: body}, nil, api.ActionLookup)
 
-	var files []api.File = nil
-	if res.Success {
-		if err := json.Unmarshal([]byte(res.Data), &files); err == nil {
-			return files, nil
-		} else {
-			return nil, fmt.Errorf("Error al decodificar la lista de archivos: %w", err)
-		}
-	} else {
+	if !res.Success {
 		return nil, fmt.Errorf("Error del servidor: %s", res.Message)
 	}
+
+	var files []api.File
+	if err := json.Unmarshal([]byte(res.Data), &files); err != nil {
+		return nil, fmt.Errorf("Error al decodificar la lista de archivos: %w", err)
+	}
+
+	for i := range files {
+		timeStr := files[i].Modified.Format(time.RFC3339)
+		normalizedTime, _ := time.Parse(time.RFC3339, timeStr)
+		files[i].Modified = normalizedTime
+	}
+
+	return files, nil
 }
 
 func encryptFile(reader io.Reader, key []byte) (io.Reader, error) {
@@ -323,7 +329,7 @@ func (c *client) recursiveUpload(localPath string, destBasePath string) (int, in
 
 // logoutUser llama a la acción logout en el servidor, y si es exitosa,
 // borra la sesión local (currentUser/authToken).
-func (c *client) logoutUser() error {
+func (c *client) LogoutUser() error {
 
 	if c.currentUser == "" || c.authToken == "" {
 		return fmt.Errorf("no estás logueado")
@@ -463,12 +469,24 @@ func (c *client) uploadFile(filePath string, destPath string, force bool) (api.R
 
 	defer file.Close()
 
+	// Extraer metadatos del archivo original
+	stat, err := file.Stat()
+	if err != nil {
+		return api.Response{Success: false, Message: "Error leyendo metadatos"}, err
+	}
+	perms := fmt.Sprintf("%04o", stat.Mode().Perm())
+	modTime := stat.ModTime().Format(time.RFC3339)
+
 	encFile, err := encryptFile(file, c.encode)
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al cifrar el fichero"}, fmt.Errorf("error al cifrar el fichero: %w", err)
 	}
 
-	headers := []http.Header{{"X-Force": []string{fmt.Sprintf("%v", force)}}}
+	headers := []http.Header{{
+		"X-Force":       []string{fmt.Sprintf("%v", force)},
+		"X-Permissions": []string{perms},
+		"X-Modified":    []string{modTime},
+	}}
 
 	res := c.sendStreamingRequest(encFile, headers, api.ActionUpdateData, destPath)
 	return res, nil
