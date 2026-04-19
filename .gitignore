@@ -47,3 +47,6 @@ data/
 *.pem
 *.key
 *.crt
+
+# Carpeta del registro de logs
+log-server/logs
