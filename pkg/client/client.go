@@ -22,9 +22,9 @@ import (
 	"time"
 )
 
-// client estructura interna no exportada que controla
+// Client estructura interna no exportada que controla
 // el estado de la sesión (usuario, token) y logger.
-type client struct {
+type Client struct {
 	log         *log.Logger
 	currentUser string
 	authToken   string
@@ -33,7 +33,7 @@ type client struct {
 	encode      []byte
 }
 
-func NewClient(serverAddr string, certPem []byte) *client {
+func NewClient(serverAddr string, certPem []byte) *Client {
 	// Aseguramos que la URL del servidor apunta al endpoint /api que maneja
 	// las peticiones JSON/stream en el servidor. Evitamos duplicar barras.
 	//Ponemos https, quitamos la barra final y añadimos /api si no está presente.
@@ -61,7 +61,7 @@ func NewClient(serverAddr string, certPem []byte) *client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = tlsConfig
 
-	return &client{
+	return &Client{
 		log: log.New(os.Stdout, "[cli] ", log.LstdFlags),
 		httpClient: &http.Client{
 			Timeout:   5 * time.Second,
@@ -72,13 +72,13 @@ func NewClient(serverAddr string, certPem []byte) *client {
 }
 
 // hashPassword es una función auxiliar para hashear contraseñas antes de enviarlas al servidor.
-func (c *client) hashPassword(password string) [64]byte { // En un caso real, se debería usar un algoritmo de hashing fuerte como bcrypt o Argon2.
+func (c *Client) hashPassword(password string) [64]byte { // En un caso real, se debería usar un algoritmo de hashing fuerte como bcrypt o Argon2.
 	// Aquí usaremos SHA512 por simplicidad, aunque no es recomendado para contraseñas.
 	// Además, en un caso real se debería usar un salt único por usuario.
 	return sha512.Sum512([]byte(password + c.currentUser))
 }
 
-func (c *client) Login(username, password string) error {
+func (c *Client) Login(username, password string) error {
 	hashedPassword := c.hashPassword(password)
 	c.encode = hashedPassword[:32]       // Usamos solo los primeros 32 bytes del hash para el cifrado.
 	loginPassword := hashedPassword[32:] // Usamos solo los últimos 32 bytes del hash para la contraseña.
@@ -101,7 +101,7 @@ func (c *client) Login(username, password string) error {
 	}
 }
 
-func (c *client) Register(username, password string) error {
+func (c *Client) Register(username, password string) error {
 	hashedPassword := c.hashPassword(password)
 	c.encode = hashedPassword[:32]          // Usamos solo los primeros 32 bytes del hash para el cifrado.
 	registerPassword := hashedPassword[32:] // Usamos solo los últimos 32 bytes del hash para la contraseña.
@@ -125,7 +125,7 @@ func (c *client) Register(username, password string) error {
 
 // lookup pide un listado de los archivos de un directorio.
 // El servidor devuelve el listado asociado al usuario logueado.
-func (c *client) Lookup(remotePath string, recursive bool) ([]api.File, error) {
+func (c *Client) Lookup(remotePath string, recursive bool) ([]api.File, error) {
 	if c.currentUser == "" || c.authToken == "" {
 		return nil, fmt.Errorf("no estás logueado")
 	}
@@ -203,7 +203,7 @@ func decryptFile(reader io.Reader, key []byte) (io.Reader, error) {
 
 // fetchData pide datos privados al servidor.
 // El servidor devuelve la data asociada al usuario logueado.
-func (c *client) FetchData(remotePath, localPath string) error {
+func (c *Client) FetchData(remotePath, localPath string) error {
 
 	if c.currentUser == "" || c.authToken == "" {
 		return fmt.Errorf("no estás logueado")
@@ -257,7 +257,7 @@ func (c *client) FetchData(remotePath, localPath string) error {
 }
 
 // updateData pide nuevo texto y lo envía al servidor con ActionUpdateData.
-func (c *client) UploadData(filePathVar string, destBasePath string, recursive bool, force bool) (int, int, error) {
+func (c *Client) UploadData(filePathVar string, destBasePath string, recursive bool, force bool) (int, int, error) {
 
 	if c.currentUser == "" || c.authToken == "" {
 		return 0, 0, fmt.Errorf("no estás logueado")
@@ -293,7 +293,7 @@ func (c *client) UploadData(filePathVar string, destBasePath string, recursive b
 	return 1, 1, nil
 }
 
-func (c *client) recursiveUpload(localPath string, destBasePath string) (int, int, error) {
+func (c *Client) recursiveUpload(localPath string, destBasePath string) (int, int, error) {
 	// Enviamos la solicitud de actualización
 	if !strings.HasSuffix(localPath, string(os.PathSeparator)) {
 		localPath += string(os.PathSeparator)
@@ -329,7 +329,7 @@ func (c *client) recursiveUpload(localPath string, destBasePath string) (int, in
 
 // logoutUser llama a la acción logout en el servidor, y si es exitosa,
 // borra la sesión local (currentUser/authToken).
-func (c *client) LogoutUser() error {
+func (c *Client) LogoutUser() error {
 
 	if c.currentUser == "" || c.authToken == "" {
 		return fmt.Errorf("no estás logueado")
@@ -350,7 +350,7 @@ func (c *client) LogoutUser() error {
 }
 
 // sendStreamingRequest es una función especializada para enviar datos binarios (ficheros) al servidor.
-func (c *client) sendStreamingRequest(file io.Reader, headers []http.Header, action string, path string) api.Response {
+func (c *Client) sendStreamingRequest(file io.Reader, headers []http.Header, action string, path string) api.Response {
 	valid := api.IsValidAction(action)
 	if !valid {
 		c.log.Println("Acción no válida:", action)
@@ -405,7 +405,7 @@ func (c *client) sendStreamingRequest(file io.Reader, headers []http.Header, act
 
 // sendRequest envía un POST JSON a la URL del servidor y
 // devuelve la respuesta decodificada. Se usa para todas las acciones.
-func (c *client) sendRequest(req api.Request, headers []http.Header, action string) api.Response {
+func (c *Client) sendRequest(req api.Request, headers []http.Header, action string) api.Response {
 	valid := api.IsValidAction(action)
 	if !valid {
 		c.log.Println("Acción no válida:", action)
@@ -461,7 +461,7 @@ func (c *client) sendRequest(req api.Request, headers []http.Header, action stri
 	return res
 }
 
-func (c *client) uploadFile(filePath string, destPath string, force bool) (api.Response, error) {
+func (c *Client) uploadFile(filePath string, destPath string, force bool) (api.Response, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return api.Response{Success: false, Message: "No se ha podido abrir el fichero"}, fmt.Errorf("no se ha podido abrir el fichero: %w", err)
@@ -492,7 +492,7 @@ func (c *client) uploadFile(filePath string, destPath string, force bool) (api.R
 	return res, nil
 }
 
-func (c *client) DeleteData(targetPath string) error {
+func (c *Client) DeleteData(targetPath string) error {
 	if c.currentUser == "" || c.authToken == "" {
 		return fmt.Errorf("no estás logueado")
 	}

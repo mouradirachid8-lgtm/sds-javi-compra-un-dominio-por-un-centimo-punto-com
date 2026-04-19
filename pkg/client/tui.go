@@ -9,12 +9,12 @@ import (
 )
 
 type tui struct {
-	Client *client
+	Client *Client
 }
 
 // RunTUI maneja la lógica del menú principal.
 // Se muestran distintas opciones en función de si hay un usuario con sesión activa
-func RunTUI(client *client) {
+func RunTUI(client *Client) {
 	t := &tui{Client: client}
 
 	for {
