@@ -76,7 +76,8 @@ type UpdateDataResponse struct {
 }
 
 type LookupRequest struct {
-	Path string `json:"path"` // Path es la ruta del directorio a listar, por ejemplo "/home/user/docs"
+	Path      string `json:"path"`      // Path es la ruta del directorio a listar, por ejemplo "/home/user/docs"
+	Recursive bool   `json:"recursive"` // Si true, lista también los ficheros de las subcarpetas. Si false, solo los del directorio indicado.
 }
 
 type LookupResponse struct {
