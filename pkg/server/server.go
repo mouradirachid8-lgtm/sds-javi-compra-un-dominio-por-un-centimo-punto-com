@@ -494,6 +494,30 @@ func (s *server) userExists(username string) (bool, error) {
 	return true, nil
 }
 
+// getClientIP extrae la IP del cliente de la petición HTTP
+func getClientIP(r *http.Request) string {
+	// Intentar obtener de X-Forwarded-For primero (proxies)
+	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+		// X-Forwarded-For puede contener múltiples IPs, tomar la primera
+		ips := strings.Split(forwarded, ",")
+		if len(ips) > 0 {
+			return strings.TrimSpace(ips[0])
+		}
+	}
+	
+	// Alternativa: X-Real-IP
+	if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
+		return realIP
+	}
+	
+	// Si no hay proxies, usar RemoteAddr
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
+}
+
 func (s *server) saveFile(body io.ReadCloser, username string, force bool, path string, perms string, modTime string, clientIP string) error {
 	path = strings.ReplaceAll(path, "\\", "/") // Evitamos barras invertidas
 	path = strings.TrimSpace(path)
