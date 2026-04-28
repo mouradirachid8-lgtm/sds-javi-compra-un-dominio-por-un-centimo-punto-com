@@ -11,35 +11,39 @@ import (
 
 // Usa server de sprout como servidor de backup
 
-type backupClient struct {
-	token      string
+type BackupClient struct {
 	backupPath string
 	client     *client.Client
 }
 
 // El username y token(password) se usan para autentica en el servidor de backups
-func NewBackupClient(username, token, srvAddr string, certPerm []byte) *backupClient {
+func NewBackupClient(username, token, srvAddr string, certPerm []byte) *BackupClient {
 	if token == "" || srvAddr == "" {
 		return nil
 	}
 	client := client.NewClient(srvAddr, certPerm)
 	// Ya se hara mas seguro en el futuro
-	client.Login(username, token)
-
-	return &backupClient{
-		token:      token,
+	err := client.Login(username, token)
+	if err != nil {
+		fmt.Printf("Error autenticando en el servidor de backup: %v\n", err)
+		return nil
+	}
+	return &BackupClient{
 		client:     client,
 		backupPath: "backups",
 	}
 }
 
-func (c *backupClient) setToken(token string) { //Por si queremos cambiar el token después de crear el cliente
-	c.token = token
+func (bc *BackupClient) login(username, token string) error {
+	if token == "" {
+		return fmt.Errorf("token vacío")
+	}
+	return bc.client.Login(username, token)
 }
 
 // Backup completo de la ruta dada, con el nombre dado (si no se da, se usará el nombre de la carpeta)
 // Guarda la fecha y hora en el nombre del backup, con formato RFC3339 (ejemplo: backup-2026-01-01T00:00:00Z.tar.gz)
-func (c *backupClient) Backup(Path string, name string) error { //Hace backup de los datos en la ruta dada
+func (bc *BackupClient) Backup(Path string, name string) error { //Hace backup de los datos en la ruta dada
 	if Path == "" {
 		return fmt.Errorf("Ruta vacía")
 	}
@@ -65,9 +69,13 @@ func (c *backupClient) Backup(Path string, name string) error { //Hace backup de
 
 	// Subimos el backup al servidor
 	// (nombre)2026-01-01T00:00:00Z.tar.gz
-	backupName := fmt.Sprintf("%s-%s.tar.gz", strings.TrimSpace(time.Now().UTC().Format(time.RFC3339)), strings.TrimSuffix(name, string(filepath.Separator)))
+	t := time.Now().UTC().Format(time.RFC3339)
+	t = strings.ReplaceAll(t, ":", "-")
+	t = strings.ReplaceAll(t, "/", "-") // opcional
+	t = strings.TrimSpace(t)
+	backupName := fmt.Sprintf("%s-%s.tar.gz", t, strings.TrimSuffix(name, string(filepath.Separator)))
 
-	if err := c.uploadBackup(compressedPath, backupName); err != nil {
+	if err := bc.uploadBackup(compressedPath, backupName); err != nil {
 		return err
 	}
 
@@ -75,11 +83,8 @@ func (c *backupClient) Backup(Path string, name string) error { //Hace backup de
 }
 
 // Lista los backups disponibles en el servidor, devolviendo sus nombres
-func (c *backupClient) ListBackups() ([]string, error) {
-	if c.token == "" {
-		return nil, fmt.Errorf("token vacío")
-	}
-	fileMetada, err := c.client.Lookup(c.backupPath, false) //No hace falta que sea recursivo
+func (bc *BackupClient) ListBackups() ([]string, error) {
+	fileMetada, err := bc.client.Lookup(bc.backupPath, false) //No hace falta que sea recursivo
 	if err != nil {
 		return nil, err
 	}
@@ -90,19 +95,15 @@ func (c *backupClient) ListBackups() ([]string, error) {
 	return list, nil
 }
 
-func (c *backupClient) uploadBackup(origin, name string) error {
-	if c.token == "" {
-		return fmt.Errorf("token vacío")
-	}
-	destiny := fmt.Sprintf("%s/%s", c.backupPath, name)
-	_, _, err := c.client.UploadData(origin, destiny, false, true)
+func (bc *BackupClient) uploadBackup(origin, name string) error {
+
+	destiny := fmt.Sprintf("%s/%s", bc.backupPath, name)
+	_, _, err := bc.client.UploadData(origin, destiny, false, true)
 	return err
 }
 
-func (c *backupClient) DownloadBackup(name, dest string) error {
-	if c.token == "" {
-		return fmt.Errorf("token vacío")
-	}
-	origin := fmt.Sprintf("%s/%s", c.backupPath, name)
-	return c.client.FetchData(origin, dest)
+func (bc *BackupClient) DownloadBackup(name, dest string) error {
+
+	origin := fmt.Sprintf("%s/%s", bc.backupPath, name)
+	return bc.client.FetchData(origin, dest)
 }

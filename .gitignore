@@ -42,6 +42,7 @@ sprout
 
 # Carpeta de datos local
 data/
+backup/
 
 # Certificados y claves generados para pruebas
 *.pem
