@@ -224,12 +224,74 @@ func (s *server) registerUser(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error al guardar credenciales"}
 	}
 
-	// Creamos una entrada vacía para los datos en 'userdata'
-	if err := s.db.Put("userdata", []byte(regReq.Username), []byte("")); err != nil {
+	// Definir el rol, que por defecto será user
+	userData := UserData{
+		Roles: []string{"user"},
+	}
+	// Pero si se trata del administrados, entonces otorgar permisos de admin
+	if regReq.Username == "admin" {
+		userData.Roles = []string{"admin"}
+	}
+	data, _ := json.Marshal(userData)
+
+	// Creamos una entrada para los datos en 'userdata'
+	if err := s.db.Put("userdata", []byte(regReq.Username), data); err != nil {
 		return api.Response{Success: false, Message: "Error al inicializar datos de usuario"}
 	}
 
 	return api.Response{Success: true, Message: "Usuario registrado"}
+}
+
+func (s *server) hasPermission(username string, filePath string, perm Permission) bool {
+
+	// Comprobar si es admin, en cuyo casot endria acceso total
+	userDataBytes, err := s.db.Get("userdata", []byte(username))
+	if err == nil {
+		var userData UserData
+		if json.Unmarshal(userDataBytes, &userData) == nil {
+			for _, r := range userData.Roles {
+				if r == "admin" {
+					return true
+				}
+			}
+		}
+	}
+
+	// En cualquier otro caso, cargar metadata
+	data, err := s.db.Get("metadata", []byte(filePath))
+
+	// Si es inexistente, solo permitir acceso si es propietario
+	if err != nil {
+		return strings.HasPrefix(filePath, "/"+username+"/")
+	}
+
+	// Transformar al tipo de struct que hemos definido
+	var meta FileMetadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return false
+	}
+
+	// Si se trata del propietario del archivo, conceder acceso
+	if username == meta.Owner {
+		return true
+	}
+
+	// Si se trata de un archivo público, conceder acceso
+	if meta.Public && perm == PermissionRead {
+		return true
+	}
+
+	// Si se encuentra en la lista de control de acceso, conceder acceso
+	if perms, ok := meta.ACL[username]; ok {
+		for _, p := range perms {
+			if p == perm {
+				return true
+			}
+		}
+	}
+
+	// En cualquier otro caso que no le deje
+	return false
 }
 
 // loginUser valida credenciales en el namespace 'auth' y genera un token en 'sessions'.
@@ -311,6 +373,15 @@ func (s *server) lookup(req api.Request, token string) api.Response {
 	seenDirs := make(map[string]bool) // Para evitar listar varias veces la misma carpeta
 
 	for _, key := range rawKeys {
+		filePath := string(key)
+
+		//En caso de que se trate de un archivo, comprobar si tiene permisos de lectura
+		if !strings.HasSuffix(filePath, "/") {
+			if !s.hasPermission(username, filePath, PermissionRead) {
+				continue
+			}
+		}
+
 		remaining := strings.TrimPrefix(string(key), prefix)
 
 		// No listar recursivamente
@@ -453,8 +524,14 @@ func (s *server) saveFile(body io.ReadCloser, username string, force bool, path 
 		if !errors.Is(err, store.ErrKeyNotFound) && !errors.Is(err, store.ErrNamespaceNotFound) {
 			return fmt.Errorf("error al leer datos: %w", err)
 		}
-	} else if data != nil && !force {
-		return fmt.Errorf("archivo ya existe")
+	} else if data != nil {
+		if !s.hasPermission(username, path, PermissionWrite) {
+			return fmt.Errorf("sin permisos para sobrescribir")
+		}
+
+		if !force {
+			return fmt.Errorf("archivo ya existe")
+		}
 	}
 
 	if data != nil {
@@ -490,15 +567,18 @@ func (s *server) saveFile(body io.ReadCloser, username string, force bool, path 
 		finalModTime = t
 	}
 
+	// Permisos de SO, diria que no hace absolutamente nada
+	// Hay que checar esto
 	if perms == "" {
 		perms = "0644"
 	}
 
-	// Aplicamos los permisos
+	// Aplicamos los permisos del SO
 	if p, errParse := strconv.ParseUint(perms, 8, 32); errParse == nil {
 		file.Chmod(os.FileMode(p))
 	}
 
+	// Serializar datos
 	fileBytes, err := json.Marshal(api.File{
 		Name:        filepath.Base(path),
 		Modified:    finalModTime,
@@ -513,9 +593,26 @@ func (s *server) saveFile(body io.ReadCloser, username string, force bool, path 
 		return fmt.Errorf("error al serializar metadatos: %w", err)
 	}
 
+	// Guardar archivo
 	if err := s.db.Put("userdata", []byte(path), fileBytes); err != nil {
 		os.Remove(s.basePath + path)
 		return fmt.Errorf("error al guardar archivo: %w", err)
+	}
+
+	// Crear metadatos si no existen
+	_, err = s.db.Get("metadata", []byte(path))
+	if err != nil {
+		metadata := FileMetadata{
+			Owner:  username,
+			ACL:    make(map[string][]Permission),
+			Public: false,
+		}
+
+		metaBytes, _ := json.Marshal(metadata)
+
+		if err := s.db.Put("metadata", []byte(path), metaBytes); err != nil {
+			return fmt.Errorf("error al guardar metadata: %w", err)
+		}
 	}
 
 	return nil
@@ -549,7 +646,7 @@ func (s *server) deleteData(req api.Request, token string) api.Response {
 		target = filepath.Base(target)
 	}
 
-	// copidoa de saveFile
+	// copiado de saveFile
 	target = strings.TrimPrefix(target, "/")
 	dbPath := "/" + username + "/" + target
 	dbPath = strings.ReplaceAll(dbPath, "//", "/")
@@ -586,6 +683,11 @@ func (s *server) deleteData(req api.Request, token string) api.Response {
 		})
 	}
 
+	// Comprobar si tiene permisos para borrar
+	if !s.hasPermission(username, dbPath, PermissionDelete) {
+		return api.Response{Success: false, Message: "Sin permisos"}
+	}
+
 	// Borramos del disco
 	if err := os.RemoveAll(fullSystemPath); err != nil {
 		s.log.Printf("Error al borrar físico %s: %v", fullSystemPath, err)
@@ -595,6 +697,7 @@ func (s *server) deleteData(req api.Request, token string) api.Response {
 	// Borramos los registros de la db
 	for _, p := range pathsToDelete {
 		_ = s.db.Delete("userdata", []byte(p))
+		_ = s.db.Delete("metadata", []byte(p))
 	}
 
 	s.log.Printf("Borrado completado para usuario '%s' en path '%s' (Es dir: %v)", username, dbPath, stat.IsDir())
@@ -636,6 +739,12 @@ func (s *server) streamFetchData(w http.ResponseWriter, req api.Request, token s
 	path = strings.TrimPrefix(path, "/")
 	dbPath := "/" + username + "/" + path
 	dbPath = strings.ReplaceAll(dbPath, "//", "/")
+
+	// Comprobar si tiene permisos
+	if !s.hasPermission(username, dbPath, PermissionRead) {
+		http.Error(w, "Sin permisos", http.StatusForbidden)
+		return
+	}
 
 	// Buscar archivo en base de datos
 	_, err := s.db.Get("userdata", []byte(dbPath))
