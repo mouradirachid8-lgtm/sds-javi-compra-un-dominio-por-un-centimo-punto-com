@@ -22,8 +22,9 @@ import (
 	"time"
 )
 
-// Client estructura interna no exportada que controla
-// el estado de la sesión (usuario, token) y logger.
+// Client controla el estado del la sesion del usuario, la configuración de conexión y la clave de cifrado.
+// Es el encargado de enviar las peticiones al servidor y procesar las respuestas.
+// Se debe generar mediante NewClient, que se encarga de configurar la conexión TLS con el certificado del servidor.
 type Client struct {
 	log         *log.Logger
 	currentUser string

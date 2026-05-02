@@ -129,10 +129,19 @@ func crearBackupClient(backupPort string, certPEM []byte) *backup.BackupClient {
 		fmt.Println("Quieres registrarte con estas credenciales?")
 		registrarse := ui.ReadInput("Si/No")
 		if strings.ToLower(registrarse) == "si" || strings.ToLower(registrarse) == "s" {
-			client.NewClient(url, certPEM).Register(username, password)
+			err := client.NewClient(url, certPEM).Register(username, password)
+			if err != nil {
+				fmt.Printf("Error registrando en el servidor de backup: %v\n", err)
+				return nil
+			}
+			fmt.Println("Registro exitoso. Intenta iniciar sesión nuevamente.")
+			backupClient = backup.NewBackupClient(username, password, url, certPEM)
+			if backupClient == nil {
+				fmt.Println("No se pudo crear el cliente de backup después del registro. Verifica las credenciales y la conexión al servidor de backups.")
+				return nil
+			}
+			return backupClient
 		}
-		backupClient = backup.NewBackupClient(username, password, url, certPEM)
-		return nil
 	}
 	return backupClient
 }
