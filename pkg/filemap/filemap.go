@@ -13,10 +13,9 @@ import (
 
 // FileMeta contiene la ruta del archivo en el servidor y su hash (para verificar integridad)
 type FileMeta struct {
-	ServerPath string   `json:"server_path"` // Ruta del archivo en el servidor
-	Hash       string   `json:"hash"`        // Hash del archivo para verificar integridad
-	Metadata   api.File `json:"metadata"`    // Metadatos del archivo (nombre, fecha de modificación, etc.)
-	Key        string   `json:"key"`
+	Hash     string   `json:"hash"`     // Hash del archivo para verificar integridad
+	Metadata api.File `json:"metadata"` // Metadatos del archivo (nombre, fecha de modificación, etc.)
+	Key      string   `json:"key"`
 }
 
 type FileMap struct {
@@ -35,10 +34,9 @@ func NewFileMap(key string) *FileMap {
 // AddFile añade un nuevo archivo al mapa, con su ruta en el servidor, hash y metadatos
 func (fm *FileMap) AddFile(serverPath, hash string, metadata api.File) {
 	fm.Files[serverPath] = FileMeta{
-		ServerPath: serverPath,
-		Hash:       hash,
-		Metadata:   metadata,
-		Key:        fm.Key,
+		Hash:     hash,
+		Metadata: metadata,
+		Key:      fm.Key,
 	}
 }
 
@@ -79,10 +77,9 @@ func (fm *FileMap) FilterFiles(filter func(FileMeta) bool) []string {
 func (fm *FileMap) UpdateFile(serverPath, hash string, metadata api.File) {
 	if _, ok := fm.Files[serverPath]; ok {
 		fm.Files[serverPath] = FileMeta{
-			ServerPath: serverPath,
-			Hash:       hash,
-			Metadata:   metadata,
-			Key:        fm.Key,
+			Hash:     hash,
+			Metadata: metadata,
+			Key:      fm.Key,
 		}
 	}
 }
