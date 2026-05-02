@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"sync"
@@ -92,10 +93,74 @@ func NewExternalLogger(endpoint, authEndpoint string) (*log.Logger, func(), erro
 		failed := atomic.LoadInt64(&w.failedSends)
 		success := atomic.LoadInt64(&w.successSends)
 		if dropped > 0 || failed > 0 {
-			fmt.Fprintf(os.Stderr, "[LOGGER STATS] Success: %d, Failed: %d, Dropped: %d\n", 
+			fmt.Fprintf(os.Stderr, "[LOGGER STATS] Success: %d, Failed: %d, Dropped: %d\n",
 				success, failed, dropped)
 		}
-		
+
+		// cerrar el canal para que el worker lo drene y termine
+		close(w.ch)
+		w.wg.Wait()
+	}
+	return logger, closeFn, nil
+}
+
+// NewSlogExternalLogger crea un *slog.Logger estructurado que envía sus entradas (en JSON) al endpoint.
+func NewSlogExternalLogger(endpoint, authEndpoint string) (*slog.Logger, func(), error) {
+	if endpoint == "" {
+		return nil, nil, fmt.Errorf("endpoint vacío")
+	}
+
+	w := &httpLogWriter{
+		endpoint:     endpoint,
+		authEndpoint: authEndpoint,
+		client: &http.Client{
+			Timeout: 5 * time.Second,
+		},
+		ch:           make(chan string, 100),
+		lastAuthTime: time.Now(),
+	}
+
+	// Si nos piden autenticación, leemos credenciales y autenticamos.
+	if authEndpoint != "" {
+		w.username = os.Getenv("LOG_SERVER_USER")
+		w.password = os.Getenv("LOG_SERVER_PASS")
+		if w.username == "" || w.password == "" {
+			return nil, nil, fmt.Errorf("auth required but LOG_SERVER_USER/LOG_SERVER_PASS not set")
+		}
+		if err := w.authenticate(); err != nil {
+			return nil, nil, fmt.Errorf("error authenticating to log server: %w", err)
+		}
+	}
+	w.maxAttempts = 3
+	if maxAttemptsStr := os.Getenv("LOG_SERVER_MAX_ATTEMPTS"); maxAttemptsStr != "" {
+		if n, err := fmt.Sscanf(maxAttemptsStr, "%d", &w.maxAttempts); err != nil || n != 1 {
+			return nil, nil, fmt.Errorf("invalid LOG_SERVER_MAX_ATTEMPTS value: %s", maxAttemptsStr)
+		}
+	}
+
+	// worker que envía logs en background (drena el canal hasta cerrarlo)
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+		for line := range w.ch {
+			w.sendLine(line)
+		}
+	}()
+
+	// Usamos el handler JSON de slog que escribirá directamente a nuestro writer asíncrono
+	jsonHandler := slog.NewJSONHandler(w, nil)
+	logger := slog.New(jsonHandler)
+
+	closeFn := func() {
+		// Mostrar estadísticas antes de cerrar
+		dropped := atomic.LoadInt64(&w.droppedLogs)
+		failed := atomic.LoadInt64(&w.failedSends)
+		success := atomic.LoadInt64(&w.successSends)
+		if dropped > 0 || failed > 0 {
+			fmt.Fprintf(os.Stderr, "[LOGGER STATS] Success: %d, Failed: %d, Dropped: %d\n",
+				success, failed, dropped)
+		}
+
 		// cerrar el canal para que el worker lo drene y termine
 		close(w.ch)
 		w.wg.Wait()
@@ -140,7 +205,7 @@ func (w *httpLogWriter) authenticate() error {
 	w.authMu.Lock()
 	w.authToken = res.Token
 	w.authMu.Unlock()
-	
+
 	// Reset contador de fallos si la auth fue exitosa
 	atomic.StoreInt64(&w.authFailCount, 0)
 	w.lastAuthTime = time.Now()
@@ -240,18 +305,18 @@ func (w *httpLogWriter) GetStats() map[string]interface{} {
 func (w *httpLogWriter) HealthCheck() (healthy bool, message string) {
 	authFails := atomic.LoadInt64(&w.authFailCount)
 	dropped := atomic.LoadInt64(&w.droppedLogs)
-	
+
 	if authFails > 5 {
 		return false, fmt.Sprintf("Too many auth failures: %d", authFails)
 	}
-	
+
 	if dropped > 1000 {
 		return false, fmt.Sprintf("Too many dropped logs: %d", dropped)
 	}
-	
+
 	if time.Since(w.lastAuthTime) > 1*time.Hour {
 		return false, "Last auth was more than 1 hour ago"
 	}
-	
+
 	return true, "Logger is healthy"
 }

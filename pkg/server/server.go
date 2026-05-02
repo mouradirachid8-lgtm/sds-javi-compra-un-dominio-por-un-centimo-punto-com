@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"os"
@@ -24,9 +24,9 @@ import (
 
 // server encapsula el estado de nuestro servidor
 type server struct {
-	db       store.Store // base de datos
-	log      *log.Logger // logger para mensajes de error e información
-	basePath string      // ruta base para almacenar archivos (opcional)
+	db       store.Store  // base de datos
+	log      *slog.Logger // logger para mensajes de error e información
+	basePath string       // ruta base para almacenar archivos (opcional)
 }
 
 var INT64_MAX = big.NewInt(0).SetInt64(1<<63 - 1)
@@ -50,25 +50,24 @@ func Run(certPEM, keyPEM []byte, basePath string, dbName string, fileName string
 	}
 
 	// Configuramos el logger asíncrono si está definido por variables de entorno
-	loggerPrefix := "[srv] "
-	var srvLog *log.Logger
+	var srvLog *slog.Logger
 	var closeLog func()
 
 	logEndpoint := os.Getenv("LOG_SERVER_ENDPOINT")
 	logAuthEndpoint := os.Getenv("LOG_SERVER_AUTH_ENDPOINT")
 
 	if logEndpoint != "" {
-		extLog, closeFn, extErr := external_logger.NewExternalLogger(logEndpoint, logAuthEndpoint)
+		extLog, closeFn, extErr := external_logger.NewSlogExternalLogger(logEndpoint, logAuthEndpoint)
 		if extErr == nil {
 			srvLog = extLog
 			closeLog = closeFn
 		} else {
 			// Fallback silencioso a consola estándar si falla el logger
-			srvLog = log.New(os.Stdout, loggerPrefix, log.LstdFlags)
+			srvLog = slog.New(slog.NewJSONHandler(os.Stdout, nil))
 			closeLog = func() {}
 		}
 	} else {
-		srvLog = log.New(os.Stdout, loggerPrefix, log.LstdFlags)
+		srvLog = slog.New(slog.NewJSONHandler(os.Stdout, nil))
 		closeLog = func() {}
 	}
 
@@ -114,24 +113,24 @@ func Run(certPEM, keyPEM []byte, basePath string, dbName string, fileName string
 func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 	clientIP := getClientIP(r)
 	if r.Method != http.MethodPost {
-		s.log.Printf("RECHAZO MÉTODO: %s desde %s", r.Method, clientIP)
+		s.log.Warn("Método no permitido", "method", r.Method, "ip", clientIP)
 		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
 		return
 	}
 	actionHeader := r.Header.Get("X-Action")
 	if actionHeader == "" {
-		s.log.Printf("ERROR CABECERA: X-Action faltante desde %s", clientIP)
+		s.log.Warn("Falta la cabecera X-Action", "ip", clientIP)
 		http.Error(w, "Falta la cabecera X-Action", http.StatusBadRequest)
 		return
 	}
 	if !api.IsValidAction(actionHeader) {
-		s.log.Printf("ALERTA SEGURIDAD: Acción inválida '%s' desde %s", actionHeader, clientIP)
+		s.log.Warn("Acción inválida", "action", actionHeader, "ip", clientIP)
 		http.Error(w, "Acción no válida", http.StatusBadRequest)
 		return
 	}
 	ContentType := r.Header.Get("Content-Type")
 	if ContentType == "" {
-		s.log.Printf("ERROR CABECERA: Content-Type faltante desde %s", clientIP)
+		s.log.Warn("Falta la cabecera Content-Type", "ip", clientIP)
 		http.Error(w, "Falta la cabecera Content-Type", http.StatusBadRequest)
 		return
 	}
@@ -142,7 +141,7 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		s.fileHandler(w, r, clientIP)
 		return
 	} else {
-		s.log.Printf("ERROR CONTENT-TYPE: Tipo no soportado '%s' desde %s", ContentType, clientIP)
+		s.log.Warn("Content-Type no soportado", "content_type", ContentType, "ip", clientIP)
 		http.Error(w, "Content-Type no soportado", http.StatusUnsupportedMediaType)
 		return
 	}
@@ -158,13 +157,13 @@ func (s *server) jsonHandler(w http.ResponseWriter, r *http.Request, clientIP st
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		s.log.Printf("ERROR JSON: Formato inválido desde %s: %v", clientIP, err)
+		s.log.Error("Formato JSON inválido", "error", err, "ip", clientIP)
 		http.Error(w, "Error en el formato JSON", http.StatusBadRequest)
 		return
 	}
 	// Evitamos que se envíen múltiples objetos JSON concatenados.
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		s.log.Printf("ALERTA SEGURIDAD: Múltiples JSON concatenados desde %s", clientIP)
+		s.log.Warn("Múltiples JSON concatenados", "ip", clientIP)
 		http.Error(w, "Error en el formato JSON", http.StatusBadRequest)
 		return
 	}
@@ -187,7 +186,7 @@ func (s *server) jsonHandler(w http.ResponseWriter, r *http.Request, clientIP st
 	case api.ActionLogout:
 		res = s.logoutUser(req, token, clientIP)
 	default:
-		s.log.Printf("ALERTA: Acción desconocida '%s' desde %s", action, clientIP)
+		s.log.Warn("Acción desconocida", "action", action, "ip", clientIP)
 		res = api.Response{Success: false, Message: "Acción desconocida"}
 	}
 
@@ -200,7 +199,7 @@ func (s *server) fileHandler(w http.ResponseWriter, r *http.Request, clientIP st
 	// Limitar el tamaño del body usando el ResponseWriter para que
 	// http.MaxBytesReader pueda escribir el error en caso de exceder.
 	if r.ContentLength > 0 && r.ContentLength > maxUploadSize {
-		s.log.Printf("ERROR TAMAÑO: Archivo demasiado grande (%d bytes) desde %s", r.ContentLength, clientIP)
+		s.log.Warn("Archivo demasiado grande", "size", r.ContentLength, "ip", clientIP)
 		http.Error(w, "Archivo demasiado grande", http.StatusRequestEntityTooLarge)
 		return
 	}
@@ -214,7 +213,7 @@ func (s *server) fileHandler(w http.ResponseWriter, r *http.Request, clientIP st
 	case api.ActionUpdateData:
 		res = s.updateData(r.Body, token, r.Header.Get("X-Path"), r.Header.Get("X-Force") == "true", r.Header.Get("X-Permissions"), r.Header.Get("X-Modified"), clientIP)
 	default:
-		s.log.Printf("ALERTA: Acción desconocida en fileHandler '%s' desde %s", action, clientIP)
+		s.log.Warn("Acción desconocida en fileHandler", "action", action, "ip", clientIP)
 		res = api.Response{Success: false, Message: "Acción desconocida"}
 	}
 
@@ -228,35 +227,35 @@ func (s *server) fileHandler(w http.ResponseWriter, r *http.Request, clientIP st
 func (s *server) registerUser(req api.Request, clientIP string) api.Response {
 	var regReq api.RegisterRequest
 	if err := json.Unmarshal(req.Body, &regReq); err != nil {
-		s.log.Printf("FALLO REGISTRO: JSON inválido desde %s: %v", clientIP, err)
+		s.log.Error("JSON inválido en registro", "error", err, "ip", clientIP)
 		return api.Response{Success: false, Message: "Error al procesar la solicitud"}
 	}
 
 	// Validación básica
 	if regReq.Username == "" || regReq.Password == "" {
-		s.log.Printf("FALLO REGISTRO: Credenciales vacías desde %s", clientIP)
+		s.log.Warn("Credenciales vacías en registro", "ip", clientIP)
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
 
 	// Validar longitud
 	if len(regReq.Username) > 50 {
-		s.log.Printf("FALLO REGISTRO: Username demasiado largo desde %s", clientIP)
+		s.log.Warn("Username demasiado largo en registro", "ip", clientIP)
 		return api.Response{Success: false, Message: "Username demasiado largo"}
 	}
 
 	if len(regReq.Password) < 6 {
-		s.log.Printf("FALLO REGISTRO: Password demasiado corta desde %s", clientIP)
+		s.log.Warn("Password demasiado corta en registro", "ip", clientIP)
 		return api.Response{Success: false, Message: "Password debe tener al menos 6 caracteres"}
 	}
 
 	// Verificamos si ya existe el usuario en 'auth'
 	exists, err := s.userExists(regReq.Username)
 	if err != nil {
-		s.log.Printf("FALLO REGISTRO: Error BD verificando '%s' desde %s: %v", regReq.Username, clientIP, err)
+		s.log.Error("Error BD verificando usuario", "user", regReq.Username, "error", err, "ip", clientIP)
 		return api.Response{Success: false, Message: "Error al verificar usuario"}
 	}
 	if exists {
-		s.log.Printf("FALLO REGISTRO: Usuario '%s' ya existe, intento desde %s", regReq.Username, clientIP)
+		s.log.Warn("Intento de registro de usuario existente", "user", regReq.Username, "ip", clientIP)
 		return api.Response{Success: false, Message: "El usuario ya existe"}
 	}
 
@@ -268,17 +267,17 @@ func (s *server) registerUser(req api.Request, clientIP string) api.Response {
 
 	// Almacenamos la contraseña en el namespace 'auth' (clave=nombre, valor=contraseña)
 	if err := s.db.Put("auth", []byte(regReq.Username), []byte(hashedPassword)); err != nil {
-		s.log.Printf("FALLO REGISTRO: Error guardando credenciales para '%s' desde %s: %v", regReq.Username, clientIP, err)
+		s.log.Error("Error guardando credenciales", "user", regReq.Username, "error", err, "ip", clientIP)
 		return api.Response{Success: false, Message: "Error al guardar credenciales"}
 	}
 
 	// Creamos una entrada vacía para los datos en 'userdata'
 	if err := s.db.Put("userdata", []byte(regReq.Username), []byte("")); err != nil {
-		s.log.Printf("FALLO REGISTRO: Error inicializando datos para '%s' desde %s: %v", regReq.Username, clientIP, err)
+		s.log.Error("Error inicializando datos", "user", regReq.Username, "error", err, "ip", clientIP)
 		return api.Response{Success: false, Message: "Error al inicializar datos de usuario"}
 	}
 
-	s.log.Printf("ÉXITO REGISTRO: Usuario '%s' registrado desde %s", regReq.Username, clientIP)
+	s.log.Info("Usuario registrado exitosamente", "user", regReq.Username, "ip", clientIP)
 	return api.Response{Success: true, Message: "Usuario registrado"}
 }
 
@@ -286,26 +285,26 @@ func (s *server) registerUser(req api.Request, clientIP string) api.Response {
 func (s *server) loginUser(req api.Request, clientIP string) api.Response {
 	var loginReq api.LoginRequest
 	if err := json.Unmarshal(req.Body, &loginReq); err != nil {
-		s.log.Printf("FALLO LOGIN: JSON inválido desde %s: %v", clientIP, err)
+		s.log.Error("JSON inválido en login", "error", err, "ip", clientIP)
 		return api.Response{Success: false, Message: "Error al procesar la solicitud"}
 	}
 
 	if loginReq.Username == "" || loginReq.Password == "" {
-		s.log.Printf("FALLO LOGIN: Credenciales vacías desde %s", clientIP)
+		s.log.Warn("Credenciales vacías en login", "ip", clientIP)
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
 
 	// Recogemos la contraseña guardada en 'auth'
 	storedPass, err := s.db.Get("auth", []byte(loginReq.Username))
 	if err != nil {
-		s.log.Printf("FALLO LOGIN: Usuario no encontrado '%s' desde %s", loginReq.Username, clientIP)
+		s.log.Warn("Intento de login usuario no encontrado", "user", loginReq.Username, "ip", clientIP)
 		return api.Response{Success: false, Message: "Usuario no encontrado"}
 	}
 
 	// Comparamos
 	password_ok := VerifyPassword(loginReq.Password, string(storedPass))
 	if !password_ok {
-    s.log.Printf("FALLO AUTENTICACIÓN: Usuario '%s' contraseña incorrecta desde %s", loginReq.Username, clientIP)
+		s.log.Warn("Contraseña incorrecta", "user", loginReq.Username, "ip", clientIP)
 		return api.Response{Success: false, Message: "Credenciales inválidas"}
 	}
 
@@ -317,11 +316,11 @@ func (s *server) loginUser(req api.Request, clientIP string) api.Response {
 
 	// Almacenamos el token en el namespace 'sessions'
 	if err := s.db.Put("sessions", []byte(token), []byte(loginReq.Username)); err != nil {
-		s.log.Printf("FALLO LOGIN: Error creando sesión para '%s' desde %s: %v", loginReq.Username, clientIP, err)
+		s.log.Error("Error creando sesión", "user", loginReq.Username, "error", err, "ip", clientIP)
 		return api.Response{Success: false, Message: "Error al crear sesión"}
 	}
 
-	s.log.Printf("ÉXITO LOGIN: Usuario '%s' autenticado desde %s", loginReq.Username, clientIP)
+	s.log.Info("Usuario autenticado exitosamente", "user", loginReq.Username, "ip", clientIP)
 	return api.Response{Success: true, Message: "Login exitoso", Token: token}
 }
 
@@ -439,21 +438,21 @@ func (s *server) fetchData(req api.Request, token string) api.Response {
 func (s *server) updateData(body io.ReadCloser, token string, path string, force bool, perms string, modTime string, clientIP string) api.Response {
 	// Chequeo de credenciales
 	if token == "" {
-		s.log.Printf("FALLO SUBIDA: Token vacío desde %s", clientIP)
+		s.log.Warn("Fallo subida: Token vacío", "ip", clientIP)
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
 	valid, username := s.isTokenValid(s.db, token)
 	if !valid {
-		s.log.Printf("FALLO SUBIDA: Token inválido desde %s", clientIP)
+		s.log.Warn("Fallo subida: Token inválido", "ip", clientIP)
 		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
 	}
 
 	if err := s.saveFile(body, username, force, path, perms, modTime, clientIP); err != nil {
-		s.log.Printf("FALLO SUBIDA: Error guardando '%s' para '%s' desde %s: %s", path, username, clientIP, err.Error())
+		s.log.Error("Fallo subida: Error guardando archivo", "path", path, "user", username, "ip", clientIP, "error", err)
 		return api.Response{Success: false, Message: "Error al guardar datos: " + err.Error()}
 	}
 
-	s.log.Printf("ÉXITO SUBIDA: Usuario '%s' subió '%s' desde %s", username, path, clientIP)
+	s.log.Info("Usuario subió archivo", "user", username, "path", path, "ip", clientIP)
 	return api.Response{Success: true, Message: "Datos de usuario actualizados"}
 }
 
@@ -461,22 +460,22 @@ func (s *server) updateData(body io.ReadCloser, token string, path string, force
 func (s *server) logoutUser(req api.Request, token string, clientIP string) api.Response {
 	// Chequeo de credenciales
 	if token == "" {
-		s.log.Printf("FALLO LOGOUT: Token vacío desde %s", clientIP)
+		s.log.Warn("Fallo logout: Token vacío", "ip", clientIP)
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
 	valid, username := s.isTokenValid(s.db, token)
 	if !valid {
-		s.log.Printf("FALLO LOGOUT: Token inválido desde %s", clientIP)
+		s.log.Warn("Fallo logout: Token inválido", "ip", clientIP)
 		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
 	}
 
 	// Borramos la entrada en 'sessions'
 	if err := s.db.Delete("sessions", []byte(token)); err != nil {
-		s.log.Printf("FALLO LOGOUT: Error borrando sesión para '%s' desde %s: %v", username, clientIP, err)
+		s.log.Error("Fallo logout: Error borrando sesión", "user", username, "ip", clientIP, "error", err)
 		return api.Response{Success: false, Message: "Error al cerrar sesión"}
 	}
 
-	s.log.Printf("ÉXITO LOGOUT: Usuario '%s' cerró sesión desde %s", username, clientIP)
+	s.log.Info("Usuario cerró sesión", "user", username, "ip", clientIP)
 	return api.Response{Success: true, Message: "Sesión cerrada correctamente"}
 }
 
@@ -542,39 +541,39 @@ func (s *server) saveFile(body io.ReadCloser, username string, force bool, path 
 			return fmt.Errorf("error al leer datos: %w", err)
 		}
 	} else if data != nil && !force {
-		s.log.Printf("FALLO SUBIDA: Archivo existe '%s' usuario '%s' desde %s (sin force)", path, username, clientIP)
+		s.log.Warn("Fallo subida: Archivo ya existe", "user", username, "path", path, "ip", clientIP)
 		return fmt.Errorf("archivo ya existe")
 	}
 
 	if data != nil {
 		var existingFile api.File
 		if err := json.Unmarshal(data, &existingFile); err != nil {
-			s.log.Printf("ERROR METADATOS: Error parsing para '%s' usuario '%s': %v", path, username, err)
+			s.log.Error("Error procesando metadatos", "user", username, "path", path, "error", err)
 			return fmt.Errorf("error al procesar datos existentes: %w", err)
 		}
 		creationTime = existingFile.Created.Unix()
 	}
 
-	s.log.Printf("Guardando archivo para usuario '%s' en path '%s'", username, path)
+	s.log.Info("Guardando archivo", "user", username, "path", path)
 	if err := os.MkdirAll(filepath.Dir(s.basePath+path), 0755); err != nil {
-		s.log.Printf("ERROR DIRECTORIO: Error creando directorios '%s' usuario '%s': %v", path, username, err)
+		s.log.Error("Error creando directorios", "user", username, "path", path, "error", err)
 		return fmt.Errorf("error al crear directorios: %w", err)
 	}
 	file, err := os.Create(s.basePath + path) // Creamos el fichero en el sistema de archivos
 	if err != nil {
-		s.log.Printf("ERROR ARCHIVO: Error creando '%s' usuario '%s': %v", path, username, err)
+		s.log.Error("Error creando archivo físico", "user", username, "path", path, "error", err)
 		return fmt.Errorf("error al crear archivo: %w", err)
 	}
 	defer file.Close()
 	_, err = io.Copy(file, body) // Copiamos el contenido del body al fichero
 	if err != nil {
-		s.log.Printf("ERROR COPIA: Error copiando datos '%s' usuario '%s': %v", path, username, err)
+		s.log.Error("Error copiando datos al archivo", "user", username, "path", path, "error", err)
 		os.Remove(s.basePath + path)
 		return fmt.Errorf("error al copiar datos: %w", err)
 	}
 	stats, err := file.Stat()
 	if err != nil {
-		s.log.Printf("ERROR COPIA: Error al obtener información de '%s' usuario '%s': %v", path, username, err)
+		s.log.Error("Error obteniendo información del archivo", "user", username, "path", path, "error", err)
 		os.Remove(s.basePath + path)
 		return fmt.Errorf("error al obtener información del archivo: %w", err)
 	}
@@ -603,13 +602,13 @@ func (s *server) saveFile(body io.ReadCloser, username string, force bool, path 
 		Permissions: perms,
 	})
 	if err != nil {
-		s.log.Printf("ERROR COPIA: Error al serializar '%s' usuario '%s': %v", path, username, err)
+		s.log.Error("Error serializando metadatos", "user", username, "path", path, "error", err)
 		os.Remove(s.basePath + path)
 		return fmt.Errorf("error al serializar metadatos: %w", err)
 	}
 
 	if err := s.db.Put("userdata", []byte(path), fileBytes); err != nil {
-		s.log.Printf("ERROR BD: Error guardando metadatos '%s' usuario '%s': %v", path, username, err)
+		s.log.Error("Error guardando metadatos en BD", "user", username, "path", path, "error", err)
 		os.Remove(s.basePath + path)
 		return fmt.Errorf("error al guardar archivo: %w", err)
 	}
@@ -620,18 +619,18 @@ func (s *server) saveFile(body io.ReadCloser, username string, force bool, path 
 func (s *server) deleteData(req api.Request, token string, clientIP string) api.Response {
 	// 1. Chequeo de credenciales
 	if token == "" {
-		s.log.Printf("FALLO BORRADO: Token vacío desde %s", clientIP)
+		s.log.Warn("Fallo borrado: Token vacío", "ip", clientIP)
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
 	valid, username := s.isTokenValid(s.db, token)
 	if !valid {
-		s.log.Printf("FALLO BORRADO: Token inválido desde %s", clientIP)
+		s.log.Warn("Fallo borrado: Token inválido", "ip", clientIP)
 		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
 	}
 
 	var delReq api.DeleteDataRequest
 	if err := json.Unmarshal(req.Body, &delReq); err != nil {
-		s.log.Printf("FALLO BORRADO: JSON inválido usuario '%s' desde %s: %v", username, clientIP, err)
+		s.log.Error("Fallo borrado: JSON inválido", "user", username, "ip", clientIP, "error", err)
 		return api.Response{Success: false, Message: "Error al procesar la solicitud"}
 	}
 
@@ -641,12 +640,12 @@ func (s *server) deleteData(req api.Request, token string, clientIP string) api.
 
 	// Prevenir Path Traversal (evitar que suban niveles fuera de su carpeta)
 	if strings.Contains(target, "..") {
-		s.log.Printf("ALERTA SEGURIDAD: INTENTO PATH TRAVERSAL borrado '%s' usuario '%s' desde %s", target, username, clientIP)
+		s.log.Warn("Intento Path Traversal en borrado", "path", target, "user", username, "ip", clientIP)
 		return api.Response{Success: false, Message: "No se admite '..' en la ruta"}
 	}
 
 	if filepath.IsAbs(target) || (len(target) >= 2 && target[1] == ':') {
-		s.log.Printf("ALERTA SEGURIDAD: RUTA ABSOLUTA borrado '%s' usuario '%s' desde %s", target, username, clientIP)
+		s.log.Warn("Ruta absoluta enviada en borrado", "path", target, "user", username, "ip", clientIP)
 		target = filepath.Base(target)
 	}
 
@@ -657,7 +656,7 @@ func (s *server) deleteData(req api.Request, token string, clientIP string) api.
 
 	// Seguridad: Evitar que el usuario borre su carpeta raíz completa
 	if dbPath == "/"+username || dbPath == "/"+username+"/" {
-		s.log.Printf("ALERTA SEGURIDAD: INTENTO BORRAR RAÍZ usuario '%s' desde %s", username, clientIP)
+		s.log.Warn("Intento de borrar directorio raíz", "user", username, "ip", clientIP)
 		return api.Response{Success: false, Message: "No tienes permiso para borrar tu directorio raíz completo"}
 	}
 
@@ -667,10 +666,10 @@ func (s *server) deleteData(req api.Request, token string, clientIP string) api.
 	stat, err := os.Stat(fullSystemPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			s.log.Printf("FALLO BORRADO: Archivo no existe '%s' usuario '%s' desde %s", dbPath, username, clientIP)
+			s.log.Warn("Fallo borrado: Archivo no existe", "path", dbPath, "user", username, "ip", clientIP)
 			return api.Response{Success: false, Message: "El archivo o carpeta no existe"}
 		}
-		s.log.Printf("ERROR ACCESO: Error accediendo '%s' usuario '%s': %v", dbPath, username, err)
+		s.log.Error("Error accediendo a ruta", "path", dbPath, "user", username, "error", err)
 		return api.Response{Success: false, Message: "Error al acceder a la ruta"}
 	}
 
@@ -695,7 +694,7 @@ func (s *server) deleteData(req api.Request, token string, clientIP string) api.
 
 	// Borramos del disco
 	if err := os.RemoveAll(fullSystemPath); err != nil {
-		s.log.Printf("ERROR FÍSICO: Error borrando '%s' usuario '%s': %v", fullSystemPath, username, err)
+		s.log.Error("Error físico al borrar disco", "path", fullSystemPath, "user", username, "error", err)
 		return api.Response{Success: false, Message: "Error interno al borrar en el disco"}
 	}
 
@@ -709,18 +708,18 @@ func (s *server) deleteData(req api.Request, token string, clientIP string) api.
 		tipoBorrado = "directorio"
 	}
 
-	s.log.Printf("ÉXITO BORRADO: Usuario '%s' borró %s '%s' (%d items) desde %s", username, tipoBorrado, dbPath, fileCount, clientIP)
+	s.log.Info("Borrado exitoso", "user", username, "type", tipoBorrado, "path", dbPath, "items", fileCount, "ip", clientIP)
 	return api.Response{Success: true, Message: "Borrado completado correctamente"}
 }
 func (s *server) streamFetchData(w http.ResponseWriter, req api.Request, token string, clientIP string) {
 	if token == "" {
-		s.log.Printf("FALLO DESCARGA: Token vacío desde %s", clientIP)
+		s.log.Warn("Fallo descarga: Token vacío", "ip", clientIP)
 		http.Error(w, "Faltan credenciales", http.StatusUnauthorized)
 		return
 	}
 	valid, username := s.isTokenValid(s.db, token)
 	if !valid {
-		s.log.Printf("FALLO DESCARGA: Token inválido desde %s", clientIP)
+		s.log.Warn("Fallo descarga: Token inválido", "ip", clientIP)
 		http.Error(w, "Token inválido o expirado", http.StatusUnauthorized)
 		return
 	}
@@ -728,7 +727,7 @@ func (s *server) streamFetchData(w http.ResponseWriter, req api.Request, token s
 	// Busca el archivo que solicita descargar el cliente
 	var fetchReq api.FetchDataRequest
 	if err := json.Unmarshal(req.Body, &fetchReq); err != nil {
-		s.log.Printf("FALLO DESCARGA: JSON inválido para '%s' desde %s: %v", username, clientIP, err)
+		s.log.Error("Fallo descarga: JSON inválido", "user", username, "ip", clientIP, "error", err)
 		http.Error(w, "Error leyendo la petición", http.StatusBadRequest)
 		return
 	}
@@ -737,17 +736,17 @@ func (s *server) streamFetchData(w http.ResponseWriter, req api.Request, token s
 	path = strings.TrimSpace(path)
 
 	if strings.Contains(path, "..") {
-		s.log.Printf("ALERTA SEGURIDAD: INTENTO PATH TRAVERSAL descarga '%s' usuario '%s' desde %s", path, username, clientIP)
+		s.log.Warn("Intento Path Traversal en descarga", "path", path, "user", username, "ip", clientIP)
 		http.Error(w, "Ruta no permitida (no se admite '..')", http.StatusBadRequest)
 		return
 	}
 
 	// Si el cliente envía una ruta absoluta (Windows/Linux)
 	if filepath.IsAbs(path) {
-    s.log.Printf("ALERTA SEGURIDAD: RUTA ABSOLUTA descarga '%s' usuario '%s' desde %s", path, username, clientIP)
+		s.log.Warn("Ruta absoluta enviada en descarga", "path", path, "user", username, "ip", clientIP)
 		path = strings.TrimPrefix(path, "/")
 	} else if len(path) >= 2 && path[1] == ':' {
-    s.log.Printf("ALERTA SEGURIDAD: RUTA ABSOLUTA descarga '%s' usuario '%s' desde %s", path, username, clientIP)
+		s.log.Warn("Ruta absoluta enviada en descarga", "path", path, "user", username, "ip", clientIP)
 		path = strings.TrimPrefix(path, path[:2])
 	}
 
@@ -758,7 +757,7 @@ func (s *server) streamFetchData(w http.ResponseWriter, req api.Request, token s
 	// Buscar archivo en base de datos
 	_, err := s.db.Get("userdata", []byte(dbPath))
 	if err != nil {
-		s.log.Printf("FALLO DESCARGA: Archivo no encontrado '%s' usuario '%s' desde %s", dbPath, username, clientIP)
+		s.log.Warn("Fallo descarga: Archivo no encontrado", "path", dbPath, "user", username, "ip", clientIP)
 		http.Error(w, "Archivo no encontrado o sin permisos", http.StatusNotFound)
 		return
 	}
@@ -767,14 +766,14 @@ func (s *server) streamFetchData(w http.ResponseWriter, req api.Request, token s
 	physicalPath := s.basePath + dbPath
 	file, err := os.Open(physicalPath)
 	if err != nil {
-		s.log.Printf("FALLO DESCARGA: Error abriendo archivo '%s' usuario '%s' desde %s: %v", dbPath, username, clientIP, err)
+		s.log.Error("Fallo descarga: Error abriendo archivo físico", "path", dbPath, "user", username, "ip", clientIP, "error", err)
 		http.Error(w, "Error interno al abrir el archivo físico", http.StatusInternalServerError)
 		return
 	}
 	defer file.Close()
 
 	fileInfo, _ := file.Stat()
-	s.log.Printf("ÉXITO DESCARGA: Usuario '%s' descargó '%s' (%d bytes) desde %s", username, dbPath, fileInfo.Size(), clientIP)
+	s.log.Info("Descarga exitosa", "user", username, "path", dbPath, "size", fileInfo.Size(), "ip", clientIP)
 	w.Header().Set("Content-Type", "application/octet-stream") // Porque estamos pasando un archivo binario
 	io.Copy(w, file)                                           // Pasamos poco a poco la información del archivo
 }
