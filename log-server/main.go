@@ -1,8 +1,14 @@
 package main
 
 import (
+	"bufio"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -13,15 +19,18 @@ import (
 )
 
 var (
-	logDir       = "logs"
-	logFile      = filepath.Join(logDir, "auditoria.log")
-	errorLog     = filepath.Join(logDir, "errores.log")
-	securityLog  = filepath.Join(logDir, "seguridad.log")
+	logDir      = "logs"
+	logFile     = filepath.Join(logDir, "auditoria.log")
+	errorLog    = filepath.Join(logDir, "errores.log")
+	securityLog = filepath.Join(logDir, "seguridad.log")
 
-	validUser    = getEnv("LOG_SERVER_USER", "admin")
-	validPass    = getEnv("LOG_SERVER_PASS", "1234")
-	secretToken  = getEnv("LOG_SERVER_TOKEN", "token-secreto")
-	port         = getEnv("LOG_SERVER_PORT", "3000")
+	validUser   = getEnv("LOG_SERVER_USER", "admin")
+	validPass   = getEnv("LOG_SERVER_PASS", "1234")
+	secretToken = getEnv("LOG_SERVER_TOKEN", "token-secreto")
+	port        = getEnv("LOG_SERVER_PORT", "3000")
+
+	// 32 bytes para AES-256
+	encryptionKey = getEnv("LOG_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 
 	// Fail2Ban
 	failedAttempts = make(map[string]*Attempt)
@@ -55,6 +64,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login", handleLogin)
 	mux.HandleFunc("/logs", handleLogs)
+	mux.HandleFunc("/logs/read", handleReadLogs)
 	mux.HandleFunc("/health", handleHealth)
 
 	// Wrap con CORS y method check
@@ -71,7 +81,7 @@ func main() {
 			return
 		}
 
-		if r.Method != http.MethodPost && r.URL.Path != "/health" {
+		if r.Method != http.MethodPost && r.URL.Path != "/health" && !strings.HasPrefix(r.URL.Path, "/logs/read") {
 			logToFile(securityLog, fmt.Sprintf("[%s] RECHAZO MÉTODO: %s desde %s", timestamp, r.Method, clientIP))
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -88,6 +98,7 @@ func main() {
 	fmt.Printf("   Endpoints:\n")
 	fmt.Printf("   - POST /login (autenticación)\n")
 	fmt.Printf("   - POST /logs (recibir eventos)\n")
+	fmt.Printf("   - GET  /logs/read?type={auditoria|errores|seguridad} (leer logs descifrados)\n")
 	fmt.Printf("   - GET  /health (estado del servidor)\n")
 	fmt.Printf("   Log Directory: %s\n", logDir)
 	fmt.Println("=====================================")
@@ -253,13 +264,141 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 func logToFile(filePath, message string) {
 	logMu.Lock()
 	defer logMu.Unlock()
+
+	encryptedMsg, err := encrypt(message)
+	if err != nil {
+		fmt.Printf("Error cifrando log: %v\n", err)
+		return
+	}
+
 	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		fmt.Printf("Error abriendo %s: %v\n", filePath, err)
 		return
 	}
 	defer f.Close()
-	f.WriteString(message + "\n")
+	f.WriteString(encryptedMsg + "\n")
+}
+
+func handleReadLogs(w http.ResponseWriter, r *http.Request) {
+	clientIP := getClientIP(r)
+	timestamp := time.Now().Format(time.RFC3339)
+
+	authHeader := r.Header.Get("Authorization")
+	if authHeader != "Bearer "+secretToken {
+		logToFile(securityLog, fmt.Sprintf("[%s] ACCESO DENEGADO: Token inválido al leer logs desde %s", timestamp, clientIP))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Unauthorized"})
+		return
+	}
+
+	logType := r.URL.Query().Get("type")
+	var targetFile string
+	switch logType {
+	case "errores":
+		targetFile = errorLog
+	case "seguridad":
+		targetFile = securityLog
+	default:
+		targetFile = logFile
+	}
+
+	file, err := os.Open(targetFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"file": targetFile, "logs": []string{}})
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		decrypted, err := decrypt(line)
+		if err != nil {
+			fmt.Fprintln(w, "[ERROR DESCIFRANDO LÍNEA]")
+		} else {
+			fmt.Fprintln(w, decrypted)
+		}
+	}
+}
+
+func encrypt(plaintext string) (string, error) {
+	// Ajustar longitud de clave si es necesario
+	key := []byte(encryptionKey)
+	if len(key) > 32 {
+		key = key[:32]
+	} else if len(key) < 32 {
+		padded := make([]byte, 32)
+		copy(padded, key)
+		key = padded
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
+
+	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
+}
+
+func decrypt(cryptoText string) (string, error) {
+	key := []byte(encryptionKey)
+	if len(key) > 32 {
+		key = key[:32]
+	} else if len(key) < 32 {
+		padded := make([]byte, 32)
+		copy(padded, key)
+		key = padded
+	}
+
+	data, err := base64.StdEncoding.DecodeString(cryptoText)
+	if err != nil {
+		return "", err
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+
+	nonceSize := gcm.NonceSize()
+	if len(data) < nonceSize {
+		return "", fmt.Errorf("ciphertext too short")
+	}
+
+	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return "", err
+	}
+
+	return string(plaintext), nil
 }
 
 func getClientIP(r *http.Request) string {
