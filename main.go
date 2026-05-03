@@ -56,14 +56,19 @@ func main() {
 	// los mensajes en la consola.
 	logger := log.New(os.Stdout, "[main] ", log.LstdFlags)
 
-	// Generamos el certificado TLS autofirmado en memoria.
-	// El mismo cert se pasa al servidor (para arrancar TLS) y al cliente
-	// (para hacer pinning y rechazar cualquier otro certificado).
-	certPEM, keyPEM, err := certgen.Generate()
+	// Generamos el certificado TLS autofirmado y lo guardamos en disco.
+	// El certificado se pasa al servidor (para arrancar TLS) mediante sus rutas
+	// y se carga para el cliente (para hacer pinning y rechazar cualquier otro certificado).
+	if err := os.MkdirAll("certs", 0755); err != nil {
+		logger.Fatalf("Error creando carpeta certs: %v", err)
+	}
+	certFile := "certs/cert.pem"
+	keyFile := "certs/key.pem"
+	err := certgen.Generate(certFile, keyFile)
 	if err != nil {
 		logger.Fatalf("Error generando certificado TLS: %v", err)
 	}
-	logger.Println("Certificado TLS generado correctamente.")
+	logger.Println("Certificado TLS generado y guardado en disco correctamente.")
 
 	if dump {
 		// Abrimos la base de datos usando el motor bbolt
@@ -85,7 +90,7 @@ func main() {
 	// Inicia servidor HTTPS en goroutine.
 	logger.Println("Iniciando servidor HTTPS...")
 	go func() {
-		if err := server.Run(certPEM, keyPEM, basePath, dbName, fileName, port); err != nil {
+		if err := server.Run(certFile, keyFile, basePath, dbName, fileName, port); err != nil {
 			logger.Fatalf("Error del servidor: %v\n", err)
 		}
 	}()
@@ -95,6 +100,13 @@ func main() {
 	for i := 1; i <= totalSteps; i++ {
 		ui.PrintProgressBar(i, totalSteps, 30)
 		time.Sleep(100 * time.Millisecond)
+	}
+
+	// He movido la lectura del certificado por parte del cliente para comprobar que es correcto el https
+	// y funciona correctamente con cert pinning.
+	certPEM, err := os.ReadFile(certFile)
+	if err != nil {
+		logger.Fatalf("Error leyendo el certificado TLS para el cliente: %v", err)
 	}
 
 	// Inicia cliente con el cert del servidor para cert pinning.
