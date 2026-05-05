@@ -20,24 +20,28 @@ type FileMeta struct {
 
 type FileMap struct {
 	Files map[string]FileMeta `json:"files"` // Mapa de archivos, con la ruta del server como clave
-	Key   string              `json:"key"`   // Clave de cifrado para el mapa de archivos
 }
 
 // NewFileMap crea un nuevo FileMap con la clave dada y un mapa vacío de archivos
-func NewFileMap(key string) *FileMap {
+func NewFileMap() *FileMap {
 	return &FileMap{
 		Files: make(map[string]FileMeta),
-		Key:   key,
 	}
 }
 
 // AddFile añade un nuevo archivo al mapa, con su ruta en el servidor, hash y metadatos
-func (fm *FileMap) AddFile(serverPath, hash string, metadata api.File) {
+func (fm *FileMap) AddFile(serverPath, hash string, metadata api.File, key string) {
 	fm.Files[serverPath] = FileMeta{
 		Hash:     hash,
 		Metadata: metadata,
-		Key:      fm.Key,
+		Key:      key,
 	}
+}
+
+// FileExists verifica si un archivo existe en el mapa por su ruta en el servidor
+func (fm *FileMap) FileExists(serverPath string) bool {
+	_, exists := fm.Files[serverPath]
+	return exists
 }
 
 // RemoveFile elimina un archivo del mapa por su ruta en el servidor
@@ -74,12 +78,12 @@ func (fm *FileMap) FilterFiles(filter func(FileMeta) bool) []string {
 }
 
 // UpdateFile actualiza los datos de un archivo en el mapa por su ruta en el servidor
-func (fm *FileMap) UpdateFile(serverPath, hash string, metadata api.File) {
+func (fm *FileMap) UpdateFile(serverPath, hash string, metadata api.File, key string) {
 	if _, ok := fm.Files[serverPath]; ok {
 		fm.Files[serverPath] = FileMeta{
 			Hash:     hash,
 			Metadata: metadata,
-			Key:      fm.Key,
+			Key:      key,
 		}
 	}
 }
