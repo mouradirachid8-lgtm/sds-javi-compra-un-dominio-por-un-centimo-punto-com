@@ -15,18 +15,24 @@ import (
 	"path/filepath"
 	"sprout/pkg/api"
 	"sprout/pkg/external_logger"
+	"sprout/pkg/backup"
 	"sprout/pkg/store"
 	"strconv"
 	"strings"
 	"time"
 	"net"
+
+	"github.com/go-co-op/gocron/v2"
 )
 
 // server encapsula el estado de nuestro servidor
 type server struct {
-	db       store.Store  // base de datos
-	log      *slog.Logger // logger para mensajes de error e información
-	basePath string       // ruta base para almacenar archivos (opcional)
+	db         store.Store          // base de datos
+	log        *log.Logger          // logger para mensajes de error e información
+	basePath   string               // ruta base para almacenar archivos (opcional)
+	backup     *backup.BackupClient // gestor de copias de seguridad (opcional)
+	schedulder *gocron.Scheduler    // programador de tareas para backups automáticos
+	baseDir    string               // ruta base del servidor (para backups)
 }
 
 var INT64_MAX = big.NewInt(0).SetInt64(1<<63 - 1)
@@ -36,7 +42,7 @@ const maxUploadSize = 1000 << 20 // 1000 MiB por defecto
 // Run inicia la base de datos y arranca el servidor HTTPS con el certificado TLS proporcionado.
 // certFile y keyFile son las rutas al certificado y a la clave privada en disco,
 // generados por el paquete certgen.
-func Run(certFile, keyFile string, basePath string, dbName string, fileName string, port string) error {
+func Run(certFile, keyFile string, basePath string, dbName string, fileName string, port string, backupClient *backup.BackupClient, name string) error {
 
 	// Crear la carpeta 'data' en caso de que no exista.
 	if err := os.MkdirAll(basePath, 0755); err != nil {
@@ -44,7 +50,7 @@ func Run(certFile, keyFile string, basePath string, dbName string, fileName stri
 	}
 
 	// Abrimos la base de datos usando el motor bbolt
-	db, err := store.NewStore("bbolt", fmt.Sprintf("%s/server.db", basePath))
+	db, err := store.NewStore("bbolt", fmt.Sprintf("%s/%s", basePath, dbName))
 	if err != nil {
 		return fmt.Errorf("error abriendo base de datos: %v", err)
 	}
@@ -70,12 +76,19 @@ func Run(certFile, keyFile string, basePath string, dbName string, fileName stri
 		srvLog = slog.New(slog.NewJSONHandler(os.Stdout, nil))
 		closeLog = func() {}
 	}
+  
+  s, err := gocron.NewScheduler()
+	if err != nil {
+		return fmt.Errorf("error creando el programador de tareas: %w", err)
+	}
 
-	// Creamos nuestro servidor con su logger
 	srv := &server{
-		db:       db,
-		log:      srvLog,
-		basePath: "data/files", // carpeta para almacenar archivos (opcional)
+		db:         db,
+		log:        log.New(os.Stdout, "["+name+"] ", log.LstdFlags),
+		basePath:   fmt.Sprintf("%s/%s", basePath, fileName), // carpeta para almacenar archivos (opcional)
+		baseDir:    basePath,
+		backup:     backupClient,
+		schedulder: &s,
 	}
 
 	// Al terminar, cerramos la base de datos y flusheamos el logger
@@ -88,17 +101,32 @@ func Run(certFile, keyFile string, basePath string, dbName string, fileName stri
 	mux := http.NewServeMux()
 	mux.Handle("/api", http.HandlerFunc(srv.apiHandler))
 
-	// Iniciamos el servidor HTTPS. 
+	// Iniciamos el servidor HTTPS.
 	// ListenAndServeTLS se encargará de cargar los certificados desde los archivos en el disco.
 	httpSrv := &http.Server{
 		Addr:    ":" + port,
 		Handler: mux,
 		TLSConfig: &tls.Config{
-			MinVersion:   tls.VersionTLS12,
+			MinVersion: tls.VersionTLS12,
 		},
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	
+	if backupClient != nil {
+		//Backup diario a las 00:00 UTC
+		_, err = s.NewJob(gocron.DailyJob(1, gocron.NewAtTimes(
+			gocron.NewAtTime(0, 0, 0),
+		),
+		), gocron.NewTask(srv.backupAll))
+		if err != nil {
+			return fmt.Errorf("error programando el backup: %w", err)
+		}
+
+		s.Start()
+	} else {
+		srv.log.Printf("No se ha proporcionado un cliente de backup. Las copias de seguridad automáticas estarán deshabilitadas.")
+	}
+
+	// Pasamos strings vacíos porque ya configuramos TLSConfig.Certificates
 	return httpSrv.ListenAndServeTLS(certFile, keyFile)
 }
 
@@ -770,4 +798,18 @@ func (s *server) streamFetchData(w http.ResponseWriter, req api.Request, token s
 	s.log.Info("Descarga exitosa", "user", username, "path", dbPath, "size", fileInfo.Size(), "ip", clientIP)
 	w.Header().Set("Content-Type", "application/octet-stream") // Porque estamos pasando un archivo binario
 	io.Copy(w, file)                                           // Pasamos poco a poco la información del archivo
+}
+
+func (s *server) backupAll() error {
+	if s.backup == nil {
+		return fmt.Errorf("backup no configurado")
+	}
+	s.log.Printf("Iniciando backup de la ruta '%s'...", s.baseDir)
+	err := s.backup.Backup(s.baseDir, "server-backup")
+	if err != nil {
+		s.log.Printf("Error durante el backup: %v", err)
+		return err
+	}
+	s.log.Printf("Backup completado para la ruta '%s'", s.baseDir)
+	return nil
 }
