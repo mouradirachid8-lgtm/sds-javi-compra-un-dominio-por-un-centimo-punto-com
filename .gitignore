@@ -48,3 +48,4 @@ backup/
 *.pem
 *.key
 *.crt
+certs/
