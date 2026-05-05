@@ -11,6 +11,7 @@ estudiantes: 	**entregar**
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"log"
@@ -27,6 +28,20 @@ import (
 )
 
 func main() {
+	// Intentamos cargar .env si existe (evitamos añadir dependencias externas para algo tan básico)
+	if envFile, err := os.Open(".env"); err == nil {
+		scanner := bufio.NewScanner(envFile)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line != "" && !strings.HasPrefix(line, "#") {
+				parts := strings.SplitN(line, "=", 2)
+				if len(parts) == 2 {
+					os.Setenv(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
+				}
+			}
+		}
+		envFile.Close()
+	}
 	//Obtenemos parametros de entrada
 	var basePath, dbName, fileName, port string
 	var backupBasePath, dbNameBackup, fileNameBackup, backupPort string
