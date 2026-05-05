@@ -10,17 +10,17 @@ import (
 	"io"
 	"log/slog"
 	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sprout/pkg/api"
-	"sprout/pkg/external_logger"
 	"sprout/pkg/backup"
+	"sprout/pkg/external_logger"
 	"sprout/pkg/store"
 	"strconv"
 	"strings"
 	"time"
-	"net"
 
 	"github.com/go-co-op/gocron/v2"
 )
@@ -28,7 +28,7 @@ import (
 // server encapsula el estado de nuestro servidor
 type server struct {
 	db         store.Store          // base de datos
-	log        *log.Logger          // logger para mensajes de error e información
+	log        *slog.Logger         // logger para mensajes de error e información
 	basePath   string               // ruta base para almacenar archivos (opcional)
 	backup     *backup.BackupClient // gestor de copias de seguridad (opcional)
 	schedulder *gocron.Scheduler    // programador de tareas para backups automáticos
@@ -76,15 +76,15 @@ func Run(certFile, keyFile string, basePath string, dbName string, fileName stri
 		srvLog = slog.New(slog.NewJSONHandler(os.Stdout, nil))
 		closeLog = func() {}
 	}
-  
-  s, err := gocron.NewScheduler()
+
+	s, err := gocron.NewScheduler()
 	if err != nil {
 		return fmt.Errorf("error creando el programador de tareas: %w", err)
 	}
 
 	srv := &server{
 		db:         db,
-		log:        log.New(os.Stdout, "["+name+"] ", log.LstdFlags),
+		log:        srvLog,
 		basePath:   fmt.Sprintf("%s/%s", basePath, fileName), // carpeta para almacenar archivos (opcional)
 		baseDir:    basePath,
 		backup:     backupClient,
@@ -123,7 +123,7 @@ func Run(certFile, keyFile string, basePath string, dbName string, fileName stri
 
 		s.Start()
 	} else {
-		srv.log.Printf("No se ha proporcionado un cliente de backup. Las copias de seguridad automáticas estarán deshabilitadas.")
+		srv.log.Warn("No se ha proporcionado un cliente de backup. Las copias de seguridad automáticas estarán deshabilitadas.")
 	}
 
 	// Pasamos strings vacíos porque ya configuramos TLSConfig.Certificates
@@ -525,12 +525,12 @@ func getClientIP(r *http.Request) string {
 			return strings.TrimSpace(ips[0])
 		}
 	}
-	
+
 	// Alternativa: X-Real-IP
 	if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
 		return realIP
 	}
-	
+
 	// Si no hay proxies, usar RemoteAddr
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -804,12 +804,12 @@ func (s *server) backupAll() error {
 	if s.backup == nil {
 		return fmt.Errorf("backup no configurado")
 	}
-	s.log.Printf("Iniciando backup de la ruta '%s'...", s.baseDir)
+	s.log.Warn("Iniciando backup de la ruta '%s'...", s.baseDir)
 	err := s.backup.Backup(s.baseDir, "server-backup")
 	if err != nil {
-		s.log.Printf("Error durante el backup: %v", err)
+		s.log.Warn("Error durante el backup: %v", err)
 		return err
 	}
-	s.log.Printf("Backup completado para la ruta '%s'", s.baseDir)
+	s.log.Warn("Backup completado para la ruta '%s'", s.baseDir)
 	return nil
 }
