@@ -3,6 +3,7 @@ module sprout
 go 1.26.0
 
 require (
+	github.com/go-co-op/gocron/v2 v2.21.1
 	go.etcd.io/bbolt v1.4.3
 	golang.org/x/crypto v0.50.0
 	golang.org/x/term v0.42.0
